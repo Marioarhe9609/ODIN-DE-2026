@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Odin Graph Suite - Red Interactiva</title>
+    <!-- Tailwind CSS CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <!-- Cytoscape.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+        #cy {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(51, 65, 85, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <!-- Header overlay -->
+    <div class="absolute top-4 left-4 right-4 z-10 pointer-events-none">
+        <div class="glass-panel p-4 rounded-xl shadow-lg pointer-events-auto flex items-center justify-between">
+            <div>
+                <h1 id="graph-title" class="text-sm md:text-base font-bold text-slate-100">Cargando Red de Contratación...</h1>
+                <p class="text-xs text-slate-400">Toca un nodo o enlace para ver los detalles.</p>
+            </div>
+            <button onclick="resetZoom()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-xs font-semibold rounded-lg shadow transition">
+                Reajustar
+            </button>
+        </div>
+    </div>
+
+    <!-- Sidebar detail drawer (hidden by default) -->
+    <div id="detail-drawer" class="absolute bottom-4 left-4 right-4 md:right-auto md:top-24 md:bottom-auto md:w-80 z-10 glass-panel p-4 rounded-xl shadow-2xl transition-all duration-300 transform translate-y-full opacity-0 pointer-events-auto">
+        <div class="flex justify-between items-start mb-3">
+            <h2 id="detail-type" class="text-xs font-bold uppercase tracking-wider text-indigo-400">Detalles</h2>
+            <button onclick="closeDrawer()" class="text-slate-400 hover:text-slate-200 text-sm font-bold">&times;</button>
+        </div>
+        <div id="detail-content" class="space-y-2">
+            <!-- Dynamic content goes here -->
+        </div>
+    </div>
+
+    <!-- Cytoscape viewport container -->
+    <div id="cy"></div>
+
+    <script>
+        let cy;
+
+        // Parse query parameter and fetch graph data
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const encodedGraph = urlParams.get('g');
+            const cid = urlParams.get('cid');
+            const titleParam = urlParams.get('t') || "Red de Contratación Pública";
+
+            document.getElementById('graph-title').textContent = titleParam;
+
+            if (cid) {
+                // Fetch JSON from endpoint
+                fetch(`/charts/${cid}.json`)
+                    .then(response => {
+                        if (!response.ok) throw new Error("Graph JSON not found");
+                        return response.json();
+                    })
+                    .then(graphData => initializeGraph(graphData))
+                    .catch(err => {
+                        console.error("Error fetching graph data:", err);
+                        document.getElementById('graph-title').textContent = "Error al cargar la red (posiblemente caducada).";
+                    });
+            } else if (encodedGraph) {
+                // Fallback for legacy Base64 encoded URLs
+                try {
+                    const jsonString = decodeURIComponent(escape(atob(encodedGraph)));
+                    const graphData = JSON.parse(jsonString);
+                    initializeGraph(graphData);
+                } catch (err) {
+                    console.error("Error parsing graph data:", err);
+                    document.getElementById('graph-title').textContent = "Error al decodificar la red.";
+                }
+            } else {
+                document.getElementById('graph-title').textContent = "Error: Faltan datos del grafo.";
+            }
+        });
+
+        function initializeGraph(elements) {
+            cy = cytoscape({
+                container: document.getElementById('cy'),
+                elements: elements,
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'width': 'data(size)',
+                            'height': 'data(size)',
+                            'background-color': 'data(color)',
+                            'color': '#f8fafc',
+                            'font-size': '10px',
+                            'font-weight': 'bold',
+                            'text-wrap': 'wrap',
+                            'text-max-width': '100px',
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'border-width': '1.5px',
+                            'border-color': 'data(edgecolor)',
+                            'overlay-opacity': 0,
+                            'z-index': 3
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 'data(weight)',
+                            'line-color': '#6366f1',
+                            'opacity': 0.35,
+                            'curve-style': 'bezier',
+                            'label': 'data(label)',
+                            'font-size': '8px',
+                            'color': '#94a3b8',
+                            'text-background-opacity': 0.8,
+                            'text-background-color': '#1e293b',
+                            'text-background-padding': '2px',
+                            'text-background-shape': 'roundrectangle',
+                            'overlay-opacity': 0,
+                            'z-index': 1
+                        }
+                    },
+                    {
+                        selector: 'node:selected',
+                        style: {
+                            'border-color': '#f8fafc',
+                            'border-width': '3px'
+                        }
+                    },
+                    {
+                        selector: 'edge:selected',
+                        style: {
+                            'line-color': '#818cf8',
+                            'opacity': 0.8
+                        }
+                    }
+                ],
+                layout: {
+                    name: 'cose',
+                    idealEdgeLength: 100,
+                    nodeOverlap: 20,
+                    refresh: 20,
+                    fit: true,
+                    padding: 40,
+                    randomize: false,
+                    componentSpacing: 100,
+                    nodeRepulsion: 400000,
+                    edgeElasticity: 100,
+                    nestingFactor: 5,
+                    gravity: 80,
+                    numIter: 1000,
+                    initialTemp: 200,
+                    coolingFactor: 0.95,
+                    minTemp: 1.0
+                }
+            });
+
+            // Tap event listeners
+            cy.on('tap', 'node', (evt) => {
+                const node = evt.target;
+                showNodeDetails(node.data());
+            });
+
+            cy.on('tap', 'edge', (evt) => {
+                const edge = evt.target;
+                showEdgeDetails(edge.data());
+            });
+
+            cy.on('tap', (evt) => {
+                if (evt.target === cy) {
+                    closeDrawer();
+                }
+            });
+        }
+
+        function showNodeDetails(data) {
+            const drawer = document.getElementById('detail-drawer');
+            const content = document.getElementById('detail-content');
+            document.getElementById('detail-type').textContent = "Detalle del Proveedor";
+
+            content.innerHTML = `
+                <div class="text-sm font-semibold text-slate-100">${data.id}</div>
+                <div class="grid grid-cols-2 gap-2 mt-3 pt-2 border-t border-slate-700/50">
+                    <div>
+                        <div class="text-2xs text-slate-400 uppercase tracking-wider font-bold">Adjudicado</div>
+                        <div class="text-xs font-bold text-slate-200 mt-0.5">${data.val}</div>
+                    </div>
+                    <div>
+                        <div class="text-2xs text-slate-400 uppercase tracking-wider font-bold">Contratos</div>
+                        <div class="text-xs font-bold text-slate-200 mt-0.5">${data.contr}</div>
+                    </div>
+                </div>
+            `;
+
+            drawer.classList.remove('translate-y-full', 'opacity-0');
+        }
+
+        function showEdgeDetails(data) {
+            const drawer = document.getElementById('detail-drawer');
+            const content = document.getElementById('detail-content');
+            document.getElementById('detail-type').textContent = "Relación Consorcial";
+
+            content.innerHTML = `
+                <div class="text-xs text-slate-400">Conexión entre:</div>
+                <div class="text-xs font-bold text-slate-200 mt-1">${data.source}</div>
+                <div class="text-2xs text-slate-400 my-1 font-bold text-center">▼ y ▼</div>
+                <div class="text-xs font-bold text-slate-200">${data.target}</div>
+                
+                <div class="mt-3 pt-2 border-t border-slate-700/50">
+                    <div class="text-2xs text-slate-400 uppercase tracking-wider font-bold">Consorcios Compartidos</div>
+                    <div class="text-sm font-bold text-indigo-400 mt-0.5">${data.weight} uniones temporales</div>
+                </div>
+            `;
+
+            drawer.classList.remove('translate-y-full', 'opacity-0');
+        }
+
+        function closeDrawer() {
+            const drawer = document.getElementById('detail-drawer');
+            drawer.classList.add('translate-y-full', 'opacity-0');
+        }
+
+        function resetZoom() {
+            if (cy) {
+                cy.animate({
+                    fit: { padding: 40 },
+                    duration: 400
+                });
+            }
+        }
+    </script>
+</body>
+</html>

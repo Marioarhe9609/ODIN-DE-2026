@@ -1,5 +1,6 @@
 """
 Odin v2 / ANLA PoC - Production Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
+PARALLELIZED VERSION (ThreadPoolExecutor with 8 workers)
 Filters National Order entities, extracts structured audit data with Gemini 2.5 Flash,
 generates 768-dim embeddings with Vertex AI text-embedding-004, and stores in BigQuery (proy-anla-poc.secop).
 """
@@ -12,6 +13,7 @@ import requests
 import datetime
 import subprocess
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from google import genai
 from google.genai import types as genai_types
 from google.cloud import bigquery
@@ -27,16 +29,19 @@ if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
 os.environ["GOOGLE_CLOUD_PROJECT"] = PROJECT
 os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
 
-# Initialize Clients
-ai_client = genai.Client(vertexai=True, project=PROJECT, location="us-central1")
+# Helper for per-thread BQ client to avoid thread safety issues
+def get_bq_client():
+    token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True, shell=True).stdout.strip()
+    credentials = Credentials(token)
+    return bigquery.Client(project=PROJECT, credentials=credentials)
 
-token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True, shell=True).stdout.strip()
-bq_credentials = Credentials(token)
-bq_client = bigquery.Client(project=PROJECT, credentials=bq_credentials)
+# AI Client
+ai_client = genai.Client(vertexai=True, project=PROJECT, location="us-central1")
 
 
 def get_national_nits():
     """Retrieve list of NITs for National Order entities from BQ."""
+    bq_client = get_bq_client()
     sql = f"""
     SELECT DISTINCT nit_entidad
     FROM `{PROJECT}.{DATASET}.contratos_electronicos`
@@ -46,7 +51,7 @@ def get_national_nits():
     return set(r.nit_entidad for r in rows)
 
 
-def fetch_national_documents(national_nits, limit=50, offset=0):
+def fetch_national_documents(national_nits, limit=100, offset=0):
     """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin)."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
     params = {
@@ -99,7 +104,7 @@ def download_pdf_text(doc_url):
 
 
 def extract_audit_metadata(text, doc_meta):
-    """Extract firmantes, entregables, and interadministrativo audit info with Gemini 2.5 Flash."""
+    """Extract firmantes and entregables audit info with Gemini 2.5 Flash."""
     prompt = f"""
 Analiza este documento contractual (Entidad: {doc_meta.get('entidad')}, Archivo: {doc_meta.get('nombre_archivo')}).
 Texto:
@@ -141,94 +146,109 @@ def generate_embedding(text):
         return None
 
 
-def run(max_documents=20):
-    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL SECOP II (ORDEN NACIONAL) en {PROJECT}.{DATASET} ===")
+def process_single_document(doc):
+    """Process a single document concurrently in a worker thread."""
+    bq_client = get_bq_client()
+    doc_id = doc.get("id_documento", str(uuid.uuid4().hex[:8]))
+    proceso_id = doc.get("proceso", "")
+    entidad = doc.get("entidad", "Entidad Nacional")
+    nit_entidad = doc.get("nit_entidad", "")
+    nombre_archivo = doc.get("nombre_archivo", "documento.pdf")
+    url_raw = doc.get("url_descarga_documento", {})
+    url_descarga = url_raw.get("url") if isinstance(url_raw, dict) else str(url_raw)
+    
+    # Check if already processed
+    check_sql = f"SELECT id_documento FROM `{PROJECT}.{DATASET}.documentos_embeddings` WHERE id_documento = '{doc_id}' LIMIT 1"
+    try:
+        if list(bq_client.query(check_sql).result()):
+            return f"SKIP {doc_id}"
+    except Exception:
+        pass
+        
+    text = download_pdf_text(url_descarga)
+    if not text or len(text.strip()) < 50:
+        return f"EMPTY {doc_id}"
+        
+    # 1. Audit Metadata
+    audit_info = extract_audit_metadata(text, doc)
+    if audit_info:
+        for f in audit_info.get("firmantes", []):
+            if f.get("nombre"):
+                row = {
+                    "id_contrato": proceso_id,
+                    "rol": f.get("rol", "FIRMANTE"),
+                    "nombre": f.get("nombre"),
+                    "numero_documento": f.get("numero_documento", ""),
+                    "cargo": f.get("cargo", ""),
+                    "entidad_o_empresa": f.get("entidad_o_empresa", entidad)
+                }
+                bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_firmantes_extendido", [row])
+                
+        for e in audit_info.get("entregables_auditoria", []):
+            row = {
+                "id_contrato": proceso_id,
+                "entregable_prometido": e.get("entregable_prometido", ""),
+                "entregable_recibido": e.get("entregable_recibido", ""),
+                "estado": e.get("estado", "CUMPLIDO"),
+                "evidencia_encontrada": nombre_archivo,
+                "alerta_aceptado_sin_implementar": e.get("alerta_aceptado_sin_implementar", False)
+            }
+            bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_auditoria_entregables", [row])
+
+    # 2. Chunks and Vectors
+    chunks = [text[i:i+800] for i in range(0, len(text), 800)][:4]
+    inserted_vecs = 0
+    for c_idx, chunk_text in enumerate(chunks):
+        embedding_vec = generate_embedding(chunk_text)
+        if embedding_vec:
+            chunk_id = f"chunk_{doc_id}_{c_idx}_{uuid.uuid4().hex[:4]}"
+            vec_row = {
+                "id_chunk": chunk_id,
+                "id_documento": doc_id,
+                "id_contrato": proceso_id,
+                "id_proceso": proceso_id,
+                "nombre_entidad": entidad,
+                "nit_entidad": nit_entidad,
+                "orden_entidad": "Nacional",
+                "tipo_documento": "Documento Anexo SECOP II",
+                "nombre_archivo": nombre_archivo,
+                "url_archivo": url_descarga,
+                "chunk_index": c_idx,
+                "texto_chunk": chunk_text[:500],
+                "embedding": embedding_vec,
+                "fecha_creacion_doc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "fecha_carga": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            }
+            errs = bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.documentos_embeddings", [vec_row])
+            if not errs:
+                inserted_vecs += 1
+                
+    print(f"  [OK HILO] Doc {doc_id} ({nombre_archivo[:30]}): {inserted_vecs} vectores insertados.")
+    return f"OK {doc_id}"
+
+
+def run(max_documents=50, max_workers=8):
+    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL PARALELIZADO ({max_workers} HILOS) en {PROJECT}.{DATASET} ===")
     national_nits = get_national_nits()
-    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional en la BD.")
+    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.")
     
     docs = fetch_national_documents(national_nits, limit=max_documents*3)
     print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.")
     
-    processed = 0
-    for doc in docs[:max_documents]:
-        doc_id = doc.get("id_documento", str(uuid.uuid4().hex[:8]))
-        proceso_id = doc.get("proceso", "")
-        entidad = doc.get("entidad", "Entidad Nacional")
-        nit_entidad = doc.get("nit_entidad", "")
-        nombre_archivo = doc.get("nombre_archivo", "documento.pdf")
-        url_raw = doc.get("url_descarga_documento", {})
-        url_descarga = url_raw.get("url") if isinstance(url_raw, dict) else str(url_raw)
-        
-        # Check if already processed
-        check_sql = f"SELECT id_documento FROM `{PROJECT}.{DATASET}.documentos_embeddings` WHERE id_documento = '{doc_id}' LIMIT 1"
-        try:
-            if list(bq_client.query(check_sql).result()):
-                print(f"  [SKIP] Documento {doc_id} ya se encuentra procesado.")
-                continue
-        except Exception:
-            pass
-            
-        print(f"\nProcesando Documento {doc_id}: {nombre_archivo} ({entidad})")
-        text = download_pdf_text(url_descarga)
-        if not text or len(text.strip()) < 50:
-            print("  [SKIP] Texto insuficiente en el PDF.")
-            continue
-            
-        # 1. Structured Audit Metadata
-        audit_info = extract_audit_metadata(text, doc)
-        if audit_info:
-            for f in audit_info.get("firmantes", []):
-                if f.get("nombre"):
-                    row = {
-                        "id_contrato": proceso_id,
-                        "rol": f.get("rol", "FIRMANTE"),
-                        "nombre": f.get("nombre"),
-                        "numero_documento": f.get("numero_documento", ""),
-                        "cargo": f.get("cargo", ""),
-                        "entidad_o_empresa": f.get("entidad_o_empresa", entidad)
-                    }
-                    bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_firmantes_extendido", [row])
-                    
-            for e in audit_info.get("entregables_auditoria", []):
-                row = {
-                    "id_contrato": proceso_id,
-                    "entregable_prometido": e.get("entregable_prometido", ""),
-                    "entregable_recibido": e.get("entregable_recibido", ""),
-                    "estado": e.get("estado", "CUMPLIDO"),
-                    "evidencia_encontrada": nombre_archivo,
-                    "alerta_aceptado_sin_implementar": e.get("alerta_aceptado_sin_implementar", False)
-                }
-                bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_auditoria_entregables", [row])
-
-        # 2. Vector Chunks
-        chunks = [text[i:i+800] for i in range(0, len(text), 800)][:4]
-        for c_idx, chunk_text in enumerate(chunks):
-            embedding_vec = generate_embedding(chunk_text)
-            if embedding_vec:
-                chunk_id = f"chunk_{doc_id}_{c_idx}_{uuid.uuid4().hex[:4]}"
-                vec_row = {
-                    "id_chunk": chunk_id,
-                    "id_documento": doc_id,
-                    "id_contrato": proceso_id,
-                    "id_proceso": proceso_id,
-                    "nombre_entidad": entidad,
-                    "nit_entidad": nit_entidad,
-                    "orden_entidad": "Nacional",
-                    "tipo_documento": "Documento Anexo SECOP II",
-                    "nombre_archivo": nombre_archivo,
-                    "url_archivo": url_descarga,
-                    "chunk_index": c_idx,
-                    "texto_chunk": chunk_text[:500],
-                    "embedding": embedding_vec,
-                    "fecha_creacion_doc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "fecha_carga": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                }
-                bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.documentos_embeddings", [vec_row])
+    processed_count = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(process_single_document, doc): doc for doc in docs[:max_documents]}
+        for future in as_completed(futures):
+            try:
+                res = future.result()
+                if res.startswith("OK"):
+                    processed_count += 1
+            except Exception as e:
+                print(f"  [ERR] Excepción en hilo: {e}")
                 
-        processed += 1
-        print(f"  [OK] Documento {doc_id} procesado e insertado exitosamente.")
-
-    print(f"\n=== PIPELINE COMPLETADO EXITOSAMENTE: {processed} nuevos documentos procesados ===")
+    print(f"\n=== PIPELINE PARALELO COMPLETADO: {processed_count} documentos procesados con {max_workers} hilos concurrente ===")
 
 if __name__ == "__main__":
-    run(max_documents=10)
+    max_docs = int(os.getenv("MAX_DOCUMENTS", "1000000"))
+    max_workers = int(os.getenv("MAX_WORKERS", "10"))
+    run(max_documents=max_docs, max_workers=max_workers)

@@ -247,12 +247,12 @@ def process_single_document(doc):
 
 
 def run(max_documents=50, max_workers=10):
-    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL PARALELIZADO ({max_workers} HILOS) en {PROJECT}.{DATASET} ===")
+    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL PARALELIZADO ({max_workers} HILOS) en {PROJECT}.{DATASET} ===", flush=True)
     national_nits = get_national_nits()
-    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.")
+    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.", flush=True)
     
     docs = fetch_national_documents(national_nits, limit=max_documents*3)
-    print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.")
+    print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.", flush=True)
     
     processed_count = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -263,9 +263,9 @@ def run(max_documents=50, max_workers=10):
                 if res and res.startswith("OK"):
                     processed_count += 1
             except Exception as e:
-                print(f"  [ERR] Excepción en hilo: {e}")
+                print(f"  [ERR] Excepción en hilo: {e}", flush=True)
                 
-    print(f"\n=== PIPELINE PARALELO COMPLETADO: {processed_count} documentos procesados con {max_workers} hilos concurrente ===")
+    print(f"\n=== PIPELINE PARALELO COMPLETADO: {processed_count} documentos procesados con {max_workers} hilos concurrente ===", flush=True)
 
 if __name__ == "__main__":
     max_docs = int(os.getenv("MAX_DOCUMENTS", "1000000"))

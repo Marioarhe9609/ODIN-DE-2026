@@ -13,5 +13,6 @@ COPY bot/ bot/
 COPY ingestion/ ingestion/
 
 ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "bot/telegram_bot.py"]

@@ -70,13 +70,16 @@ def get_national_nits():
     return set(r.nit_entidad for r in rows)
 
 
-def fetch_national_documents(national_nits, limit=100, offset=0):
-    """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin)."""
+def fetch_national_documents(national_nits, limit=200):
+    """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin) using dynamic pagination."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
+    import random
+    # Use random pagination offset to continuously ingest new documents across the 7M dataset
+    random_offset = random.randint(1, 200) * 50
     params = {
         "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
         "$limit": limit,
-        "$offset": offset,
+        "$offset": random_offset,
         "$order": "fecha_carga DESC"
     }
     resp = requests.get(url, params=params, timeout=30)

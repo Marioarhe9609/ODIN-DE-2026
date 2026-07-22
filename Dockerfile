@@ -10,6 +10,7 @@ RUN python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplo
 
 COPY agent/ agent/
 COPY bot/ bot/
+COPY ingestion/ ingestion/
 
 ENV PORT=8080
 

@@ -1,6 +1,7 @@
 """
 Odin v2 / ANLA PoC - Production Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
-PARALLELIZED VERSION (ThreadPoolExecutor with 10 workers)
+MASSIVE PARALLEL ACCELERATED VERSION
+Supports Cloud Run Multi-Task partitioning (CLOUD_RUN_TASK_INDEX) and ThreadPoolExecutor (10 workers).
 Filters National Order entities, extracts structured audit data with Gemini 2.5 Flash,
 generates 768-dim embeddings with Vertex AI text-embedding-004, and stores in BigQuery (proy-anla-poc.secop).
 """
@@ -12,6 +13,7 @@ import time
 import requests
 import datetime
 import subprocess
+import random
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from google import genai
@@ -33,15 +35,11 @@ if os.path.exists(local_adc) and "GOOGLE_APPLICATION_CREDENTIALS" not in os.envi
 
 def get_bq_client():
     """Return BigQuery client compatible with both Cloud Run ADC and local gcloud tokens."""
-    # First try default environment credentials (for Cloud Run)
     try:
-        client = bigquery.Client(project=PROJECT)
-        # Quick check if client works without error
-        return client
+        return bigquery.Client(project=PROJECT)
     except Exception:
         pass
         
-    # Local fallback for local development
     try:
         cmd = ["gcloud.cmd", "auth", "print-access-token"] if os.name == 'nt' else ["gcloud", "auth", "print-access-token"]
         token = subprocess.run(cmd, capture_output=True, text=True, shell=True).stdout.strip()
@@ -70,16 +68,20 @@ def get_national_nits():
     return set(r.nit_entidad for r in rows)
 
 
-def fetch_national_documents(national_nits, limit=200):
-    """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin) using dynamic pagination."""
+def fetch_national_documents(national_nits, limit=300):
+    """Fetch PDFs for National Order entities using multi-task partition offset."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
-    import random
-    # Safe fast offset range (0 to 15,000) to prevent deep SQL offset timeouts on SODA API
-    random_offset = random.randint(0, 300) * 50
+    
+    # Read task index from Cloud Run Jobs multi-task environment
+    task_index = int(os.getenv("CLOUD_RUN_TASK_INDEX", "0"))
+    
+    # Assign distinct offset partition slice for each container task instance
+    task_partition_offset = (task_index * 1500) + (random.randint(0, 100) * 50)
+    
     params = {
         "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
         "$limit": limit,
-        "$offset": random_offset,
+        "$offset": task_partition_offset,
         "$order": "fecha_carga DESC"
     }
     
@@ -254,12 +256,13 @@ def process_single_document(doc):
     return f"OK {doc_id}"
 
 
-def run(max_documents=50, max_workers=10):
-    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL PARALELIZADO ({max_workers} HILOS) en {PROJECT}.{DATASET} ===", flush=True)
+def run(max_documents=200, max_workers=10):
+    task_idx = os.getenv("CLOUD_RUN_TASK_INDEX", "0")
+    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL ACELERADO (TAREA #{task_idx} - {max_workers} HILOS) en {PROJECT}.{DATASET} ===", flush=True)
     national_nits = get_national_nits()
     print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.", flush=True)
     
-    docs = fetch_national_documents(national_nits, limit=max_documents*3)
+    docs = fetch_national_documents(national_nits, limit=max_documents*2)
     print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.", flush=True)
     
     processed_count = 0
@@ -273,9 +276,9 @@ def run(max_documents=50, max_workers=10):
             except Exception as e:
                 print(f"  [ERR] Excepción en hilo: {e}", flush=True)
                 
-    print(f"\n=== PIPELINE PARALELO COMPLETADO: {processed_count} documentos procesados con {max_workers} hilos concurrente ===", flush=True)
+    print(f"\n=== PIPELINE PARALELO COMPLETADO (TAREA #{task_idx}): {processed_count} documentos procesados con {max_workers} hilos concurrente ===", flush=True)
 
 if __name__ == "__main__":
     max_docs = int(os.getenv("MAX_DOCUMENTS", "1000000"))
-    max_workers = int(os.getenv("MAX_WORKERS", "5"))
+    max_workers = int(os.getenv("MAX_WORKERS", "10"))
     run(max_documents=max_docs, max_workers=max_workers)

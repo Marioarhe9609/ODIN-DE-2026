@@ -269,5 +269,5 @@ def run(max_documents=50, max_workers=10):
 
 if __name__ == "__main__":
     max_docs = int(os.getenv("MAX_DOCUMENTS", "1000000"))
-    max_workers = int(os.getenv("MAX_WORKERS", "10"))
+    max_workers = int(os.getenv("MAX_WORKERS", "5"))
     run(max_documents=max_docs, max_workers=max_workers)

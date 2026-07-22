@@ -5,7 +5,6 @@ __pycache__
 .git
 .gitignore
 docs/
-ingestion/
 logs/
 scripts/
 temp_csv/

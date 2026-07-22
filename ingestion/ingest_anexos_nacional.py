@@ -1,6 +1,6 @@
 """
 Odin v2 / ANLA PoC - Production Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
-PARALLELIZED VERSION (ThreadPoolExecutor with 8 workers)
+PARALLELIZED VERSION (ThreadPoolExecutor with 10 workers)
 Filters National Order entities, extracts structured audit data with Gemini 2.5 Flash,
 generates 768-dim embeddings with Vertex AI text-embedding-004, and stores in BigQuery (proy-anla-poc.secop).
 """
@@ -22,18 +22,37 @@ from google.oauth2.credentials import Credentials
 PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
 DATASET = os.getenv("BQ_DATASET", "secop")
 
-# Credentials
-if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\ASUS\AppData\Roaming\gcloud\legacy_credentials\marioarevaloh@gmail.com\adc.json"
-
 os.environ["GOOGLE_CLOUD_PROJECT"] = PROJECT
 os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
 
-# Helper for per-thread BQ client to avoid thread safety issues
+# Local credential fallback only if file exists
+local_adc = r"C:\Users\ASUS\AppData\Roaming\gcloud\legacy_credentials\marioarevaloh@gmail.com\adc.json"
+if os.path.exists(local_adc) and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = local_adc
+
+
 def get_bq_client():
-    token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True, shell=True).stdout.strip()
-    credentials = Credentials(token)
-    return bigquery.Client(project=PROJECT, credentials=credentials)
+    """Return BigQuery client compatible with both Cloud Run ADC and local gcloud tokens."""
+    # First try default environment credentials (for Cloud Run)
+    try:
+        client = bigquery.Client(project=PROJECT)
+        # Quick check if client works without error
+        return client
+    except Exception:
+        pass
+        
+    # Local fallback for local development
+    try:
+        cmd = ["gcloud.cmd", "auth", "print-access-token"] if os.name == 'nt' else ["gcloud", "auth", "print-access-token"]
+        token = subprocess.run(cmd, capture_output=True, text=True, shell=True).stdout.strip()
+        if token:
+            credentials = Credentials(token)
+            return bigquery.Client(project=PROJECT, credentials=credentials)
+    except Exception:
+        pass
+        
+    return bigquery.Client(project=PROJECT)
+
 
 # AI Client
 ai_client = genai.Client(vertexai=True, project=PROJECT, location="us-central1")
@@ -227,7 +246,7 @@ def process_single_document(doc):
     return f"OK {doc_id}"
 
 
-def run(max_documents=50, max_workers=8):
+def run(max_documents=50, max_workers=10):
     print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL PARALELIZADO ({max_workers} HILOS) en {PROJECT}.{DATASET} ===")
     national_nits = get_national_nits()
     print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.")
@@ -241,7 +260,7 @@ def run(max_documents=50, max_workers=8):
         for future in as_completed(futures):
             try:
                 res = future.result()
-                if res.startswith("OK"):
+                if res and res.startswith("OK"):
                     processed_count += 1
             except Exception as e:
                 print(f"  [ERR] Excepción en hilo: {e}")

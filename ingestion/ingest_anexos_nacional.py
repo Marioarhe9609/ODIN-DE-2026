@@ -74,27 +74,32 @@ def fetch_national_documents(national_nits, limit=200):
     """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin) using dynamic pagination."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
     import random
-    # Use random pagination offset to continuously ingest new documents across the 7M dataset
-    random_offset = random.randint(1, 200) * 50
+    # Safe fast offset range (0 to 15,000) to prevent deep SQL offset timeouts on SODA API
+    random_offset = random.randint(0, 300) * 50
     params = {
         "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
         "$limit": limit,
         "$offset": random_offset,
         "$order": "fecha_carga DESC"
     }
-    resp = requests.get(url, params=params, timeout=30)
-    if resp.status_code == 200:
-        records = resp.json()
-        filtered = []
-        for r in records:
-            nit = r.get("nit_entidad", "")
-            entidad = r.get("entidad", "").upper()
-            if nit in national_nits or any(k in entidad for k in ["MINISTERIO", "SUPERINTENDENCIA", "AGENCIA", "DEPARTAMENTO ADMINISTRATIVO"]):
-                filtered.append(r)
-        return filtered
-    else:
-        print(f"API Error {resp.status_code}: {resp.text}")
-        return []
+    
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, timeout=60)
+            if resp.status_code == 200:
+                records = resp.json()
+                filtered = []
+                for r in records:
+                    nit = r.get("nit_entidad", "")
+                    entidad = r.get("entidad", "").upper()
+                    if nit in national_nits or any(k in entidad for k in ["MINISTERIO", "SUPERINTENDENCIA", "AGENCIA", "DEPARTAMENTO ADMINISTRATIVO"]):
+                        filtered.append(r)
+                return filtered
+        except Exception as e:
+            print(f"  [WARN SODA API] Intento {attempt+1}/3 falló ({e}), reintentando...", flush=True)
+            time.sleep(2)
+            
+    return []
 
 
 def download_pdf_text(doc_url):
@@ -245,7 +250,7 @@ def process_single_document(doc):
             if not errs:
                 inserted_vecs += 1
                 
-    print(f"  [OK HILO] Doc {doc_id} ({nombre_archivo[:30]}): {inserted_vecs} vectores insertados.")
+    print(f"  [OK HILO] Doc {doc_id} ({nombre_archivo[:30]}): {inserted_vecs} vectores insertados.", flush=True)
     return f"OK {doc_id}"
 
 

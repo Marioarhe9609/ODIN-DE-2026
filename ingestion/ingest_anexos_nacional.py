@@ -1,0 +1,234 @@
+"""
+Odin v2 / ANLA PoC - Production Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
+Filters National Order entities, extracts structured audit data with Gemini 2.5 Flash,
+generates 768-dim embeddings with Vertex AI text-embedding-004, and stores in BigQuery (proy-anla-poc.secop).
+"""
+import os
+import re
+import uuid
+import json
+import time
+import requests
+import datetime
+import subprocess
+from io import BytesIO
+from google import genai
+from google.genai import types as genai_types
+from google.cloud import bigquery
+from google.oauth2.credentials import Credentials
+
+PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
+DATASET = os.getenv("BQ_DATASET", "secop")
+
+# Credentials
+if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\ASUS\AppData\Roaming\gcloud\legacy_credentials\marioarevaloh@gmail.com\adc.json"
+
+os.environ["GOOGLE_CLOUD_PROJECT"] = PROJECT
+os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
+
+# Initialize Clients
+ai_client = genai.Client(vertexai=True, project=PROJECT, location="us-central1")
+
+token = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, text=True, shell=True).stdout.strip()
+bq_credentials = Credentials(token)
+bq_client = bigquery.Client(project=PROJECT, credentials=bq_credentials)
+
+
+def get_national_nits():
+    """Retrieve list of NITs for National Order entities from BQ."""
+    sql = f"""
+    SELECT DISTINCT nit_entidad
+    FROM `{PROJECT}.{DATASET}.contratos_electronicos`
+    WHERE orden LIKE '%Nacional%' AND nit_entidad IS NOT NULL AND nit_entidad != ''
+    """
+    rows = list(bq_client.query(sql).result())
+    return set(r.nit_entidad for r in rows)
+
+
+def fetch_national_documents(national_nits, limit=50, offset=0):
+    """Fetch PDFs for National Order entities from datos.gov.co SODA API (dmgg-8hin)."""
+    url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
+    params = {
+        "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
+        "$limit": limit,
+        "$offset": offset,
+        "$order": "fecha_carga DESC"
+    }
+    resp = requests.get(url, params=params, timeout=30)
+    if resp.status_code == 200:
+        records = resp.json()
+        filtered = []
+        for r in records:
+            nit = r.get("nit_entidad", "")
+            entidad = r.get("entidad", "").upper()
+            if nit in national_nits or any(k in entidad for k in ["MINISTERIO", "SUPERINTENDENCIA", "AGENCIA", "DEPARTAMENTO ADMINISTRATIVO"]):
+                filtered.append(r)
+        return filtered
+    else:
+        print(f"API Error {resp.status_code}: {resp.text}")
+        return []
+
+
+def download_pdf_text(doc_url):
+    """Download PDF and extract text using PyPDF or Gemini 2.5 Flash."""
+    try:
+        r = requests.get(doc_url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            return None
+        
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(BytesIO(r.content))
+            text = ""
+            for page in reader.pages[:15]:
+                text += page.extract_text() or ""
+            if len(text.strip()) > 100:
+                return text
+        except Exception:
+            pass
+
+        pdf_part = genai_types.Part.from_bytes(data=r.content, mime_type="application/pdf")
+        res = ai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[pdf_part, "Extrae todo el texto de este PDF de contratación pública."]
+        )
+        return res.text
+    except Exception:
+        return None
+
+
+def extract_audit_metadata(text, doc_meta):
+    """Extract firmantes, entregables, and interadministrativo audit info with Gemini 2.5 Flash."""
+    prompt = f"""
+Analiza este documento contractual (Entidad: {doc_meta.get('entidad')}, Archivo: {doc_meta.get('nombre_archivo')}).
+Texto:
+\"\"\"
+{text[:12000]}
+\"\"\"
+
+Extrae la siguiente información estructurada en formato JSON:
+{{
+  "firmantes": [
+    {{"rol": "ESTRUCTURADOR | ORDENADOR | SUPERVISOR | REPR_LEGAL", "nombre": "Nombre completo", "numero_documento": "Cédula o NIT", "cargo": "Cargo", "entidad_o_empresa": "Entidad o Empresa"}}
+  ],
+  "entregables_auditoria": [
+    {{"entregable_prometido": "Requisito contractual", "entregable_recibido": "Lo efectivamente recibido", "estado": "CUMPLIDO | INCUMPLIDO | PARCIAL", "alerta_aceptado_sin_implementar": false}}
+  ]
+}}
+Devuelve únicamente JSON.
+"""
+    try:
+        res = ai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        clean = re.sub(r'```json\s*|\s*```', '', res.text.strip())
+        return json.loads(clean)
+    except Exception:
+        return None
+
+
+def generate_embedding(text):
+    """Generate 768-dimensional vector embedding with Vertex AI text-embedding-004."""
+    try:
+        res = ai_client.models.embed_content(
+            model="text-embedding-004",
+            contents=text[:2000]
+        )
+        return res.embeddings[0].values
+    except Exception:
+        return None
+
+
+def run(max_documents=20):
+    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL SECOP II (ORDEN NACIONAL) en {PROJECT}.{DATASET} ===")
+    national_nits = get_national_nits()
+    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional en la BD.")
+    
+    docs = fetch_national_documents(national_nits, limit=max_documents*3)
+    print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.")
+    
+    processed = 0
+    for doc in docs[:max_documents]:
+        doc_id = doc.get("id_documento", str(uuid.uuid4().hex[:8]))
+        proceso_id = doc.get("proceso", "")
+        entidad = doc.get("entidad", "Entidad Nacional")
+        nit_entidad = doc.get("nit_entidad", "")
+        nombre_archivo = doc.get("nombre_archivo", "documento.pdf")
+        url_raw = doc.get("url_descarga_documento", {})
+        url_descarga = url_raw.get("url") if isinstance(url_raw, dict) else str(url_raw)
+        
+        # Check if already processed
+        check_sql = f"SELECT id_documento FROM `{PROJECT}.{DATASET}.documentos_embeddings` WHERE id_documento = '{doc_id}' LIMIT 1"
+        try:
+            if list(bq_client.query(check_sql).result()):
+                print(f"  [SKIP] Documento {doc_id} ya se encuentra procesado.")
+                continue
+        except Exception:
+            pass
+            
+        print(f"\nProcesando Documento {doc_id}: {nombre_archivo} ({entidad})")
+        text = download_pdf_text(url_descarga)
+        if not text or len(text.strip()) < 50:
+            print("  [SKIP] Texto insuficiente en el PDF.")
+            continue
+            
+        # 1. Structured Audit Metadata
+        audit_info = extract_audit_metadata(text, doc)
+        if audit_info:
+            for f in audit_info.get("firmantes", []):
+                if f.get("nombre"):
+                    row = {
+                        "id_contrato": proceso_id,
+                        "rol": f.get("rol", "FIRMANTE"),
+                        "nombre": f.get("nombre"),
+                        "numero_documento": f.get("numero_documento", ""),
+                        "cargo": f.get("cargo", ""),
+                        "entidad_o_empresa": f.get("entidad_o_empresa", entidad)
+                    }
+                    bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_firmantes_extendido", [row])
+                    
+            for e in audit_info.get("entregables_auditoria", []):
+                row = {
+                    "id_contrato": proceso_id,
+                    "entregable_prometido": e.get("entregable_prometido", ""),
+                    "entregable_recibido": e.get("entregable_recibido", ""),
+                    "estado": e.get("estado", "CUMPLIDO"),
+                    "evidencia_encontrada": nombre_archivo,
+                    "alerta_aceptado_sin_implementar": e.get("alerta_aceptado_sin_implementar", False)
+                }
+                bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.contratos_auditoria_entregables", [row])
+
+        # 2. Vector Chunks
+        chunks = [text[i:i+800] for i in range(0, len(text), 800)][:4]
+        for c_idx, chunk_text in enumerate(chunks):
+            embedding_vec = generate_embedding(chunk_text)
+            if embedding_vec:
+                chunk_id = f"chunk_{doc_id}_{c_idx}_{uuid.uuid4().hex[:4]}"
+                vec_row = {
+                    "id_chunk": chunk_id,
+                    "id_documento": doc_id,
+                    "id_contrato": proceso_id,
+                    "id_proceso": proceso_id,
+                    "nombre_entidad": entidad,
+                    "nit_entidad": nit_entidad,
+                    "orden_entidad": "Nacional",
+                    "tipo_documento": "Documento Anexo SECOP II",
+                    "nombre_archivo": nombre_archivo,
+                    "url_archivo": url_descarga,
+                    "chunk_index": c_idx,
+                    "texto_chunk": chunk_text[:500],
+                    "embedding": embedding_vec,
+                    "fecha_creacion_doc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "fecha_carga": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                }
+                bq_client.insert_rows_json(f"{PROJECT}.{DATASET}.documentos_embeddings", [vec_row])
+                
+        processed += 1
+        print(f"  [OK] Documento {doc_id} procesado e insertado exitosamente.")
+
+    print(f"\n=== PIPELINE COMPLETADO EXITOSAMENTE: {processed} nuevos documentos procesados ===")
+
+if __name__ == "__main__":
+    run(max_documents=10)

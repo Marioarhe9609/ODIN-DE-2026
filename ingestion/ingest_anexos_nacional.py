@@ -105,29 +105,37 @@ def fetch_national_documents(national_nits, limit=300):
 
 
 def download_pdf_text(doc_url):
-    """Download PDF and extract text using PyPDF or Gemini 2.5 Flash."""
+    """Download PDF and extract text using PyPDF with strict size and page caps to prevent heavy token usage."""
     try:
-        r = requests.get(doc_url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code != 200:
+        r = requests.get(doc_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200 or len(r.content) < 500:
             return None
         
+        # 1. Try fast local PyPDF extraction (up to 8 pages)
         try:
             import pypdf
             reader = pypdf.PdfReader(BytesIO(r.content))
             text = ""
-            for page in reader.pages[:15]:
-                text += page.extract_text() or ""
-            if len(text.strip()) > 100:
-                return text
+            for page in reader.pages[:8]:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+            if len(text.strip()) > 80:
+                return text[:10000]
         except Exception:
             pass
 
-        pdf_part = genai_types.Part.from_bytes(data=r.content, mime_type="application/pdf")
-        res = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[pdf_part, "Extrae todo el texto de este PDF de contratación pública."]
-        )
-        return res.text
+        # 2. Fallback to Gemini 2.5 Flash ONLY for small PDFs (< 2MB)
+        if len(r.content) <= 2 * 1024 * 1024:
+            pdf_part = genai_types.Part.from_bytes(data=r.content, mime_type="application/pdf")
+            res = ai_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[pdf_part, "Extrae el texto principal de este PDF de contratación pública."]
+            )
+            return res.text[:10000] if res and res.text else None
+        else:
+            # Skip heavy multimodal OCR on large scanned PDFs to protect budget
+            return None
     except Exception:
         return None
 

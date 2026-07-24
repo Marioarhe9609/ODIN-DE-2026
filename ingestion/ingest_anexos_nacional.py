@@ -113,14 +113,18 @@ def clean_nit(nit_str):
 
 
 def fetch_national_documents(national_nits=None, limit=200):
-    """Fetch PDFs strictly for Sector Defensa, Sector TIC, and Sector Inclusión Social."""
+    """Fetch PDFs strictly and directly for Sector Defensa, Sector TIC, and Sector Inclusión Social via SODA API."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
     
     task_index = int(os.getenv("CLOUD_RUN_TASK_INDEX", "0"))
-    task_partition_offset = (task_index * 1000) + (random.randint(0, 50) * 50)
+    # Dynamic task offset tailored for targeted sector documents
+    task_partition_offset = (task_index * 500) + (random.randint(0, 100) * 100)
+    
+    # Direct NIT filter query for SODA API
+    nits_list = "('899999003', '899999162', '830040256', '899999044', '860021967', '860021180', '860021653', '860020227', '800217123', '899999053', '900334265', '830002593', '901144049', '8001316486', '800131648', '900002583', '900062917', '830079479', '900097800', '900490473', '900492970')"
     
     params = {
-        "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
+        "$where": f"extensi_n = 'pdf' AND nit_entidad IN {nits_list} AND fecha_carga >= '2024-01-01T00:00:00'",
         "$limit": limit,
         "$offset": task_partition_offset,
         "$order": "fecha_carga DESC"
@@ -128,7 +132,7 @@ def fetch_national_documents(national_nits=None, limit=200):
     
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, timeout=60)
+            resp = requests.get(url, params=params, timeout=45)
             if resp.status_code == 200:
                 records = resp.json()
                 filtered = []

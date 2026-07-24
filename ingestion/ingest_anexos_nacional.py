@@ -1,9 +1,12 @@
 """
-Odin v2 / ANLA PoC - Production Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
-MASSIVE PARALLEL ACCELERATED VERSION
-Supports Cloud Run Multi-Task partitioning (CLOUD_RUN_TASK_INDEX) and ThreadPoolExecutor (10 workers).
-Filters National Order entities, extracts structured audit data with Gemini 2.5 Flash,
-generates 768-dim embeddings with Vertex AI text-embedding-004, and stores in BigQuery (proy-anla-poc.secop).
+Odin v2 / ANLA PoC - Focused Ingestion Pipeline for SECOP II Document Annexes (dmgg-8hin)
+STRICT TARGETING:
+1. Sector Defensa (MinDefensa 899999003, Agencia Logística 899999162, HospMilitar 830040256, INDUMIL 899999044, CREMIL 860021967, Caja Honor 860021180, Defensa Civil 860021653, FORPO 860020227, SuperVigilancia 800217123)
+2. Sector TIC (MinTIC 899999053, ANE 900334265, CRC 830002593, AND 901144049, FUTIC 8001316486, RTVC 900002583, 4-72 900062917, CPE 830079479)
+3. Sector Inclusión Social y Reconciliación (DPS 900097800, UARIV 900490473, CNMH 900492970)
+
+Extracts structured audit data with Gemini 2.5 Flash, generates 768-dim embeddings with Vertex AI text-embedding-004,
+and stores in BigQuery (proy-anla-poc.secop).
 """
 import os
 import re
@@ -56,27 +59,65 @@ def get_bq_client():
 ai_client = genai.Client(vertexai=True, project=PROJECT, location="us-central1")
 
 
-def get_national_nits():
-    """Retrieve list of NITs for National Order entities from BQ."""
-    bq_client = get_bq_client()
-    sql = f"""
-    SELECT DISTINCT nit_entidad
-    FROM `{PROJECT}.{DATASET}.contratos_electronicos`
-    WHERE orden LIKE '%Nacional%' AND nit_entidad IS NOT NULL AND nit_entidad != ''
-    """
-    rows = list(bq_client.query(sql).result())
-    return set(r.nit_entidad for r in rows)
+# STRICT TARGET NITS & KEYWORDS FOR THE 3 SECTORS
+TARGET_SECTOR_NITS = {
+    # 1. Sector Defensa
+    "899999003", # MinDefensa, FONDETEC, Ejército, Armada, Fuerza Aeroespacial, Comando General, DIMAR
+    "899999162", # Agencia Logística de las Fuerzas Militares
+    "830040256", # Hospital Militar Central
+    "899999044", # Industria Militar (INDUMIL)
+    "860021967", # CREMIL
+    "860021180", # Caja Honor
+    "860021653", # Defensa Civil Colombiana
+    "860020227", # FORPO (Fondo Rotatorio de la Policía)
+    "800217123", # Superintendencia de Vigilancia y Seguridad Privada
+    # 2. Sector TIC
+    "899999053", # MinTIC
+    "900334265", # ANE (Agencia Nacional del Espectro)
+    "830002593", # CRC (Comisión de Regulación de Comunicaciones)
+    "901144049", # AND (Agencia Nacional Digital)
+    "8001316486",# FUTIC
+    "800131648",
+    "900002583", # RTVC (Sistema de Medios Públicos / Inravisión)
+    "900062917", # 4-72 (Servicios Postales Nacionales)
+    "830079479", # CPE (Computadores para Educar)
+    # 3. Sector Inclusión Social y Reconciliación
+    "900097800", # DPS (Prosperidad Social)
+    "900490473", # UARIV (Unidad para las Víctimas)
+    "900492970"  # CNMH (Centro Nacional de Memoria Histórica)
+}
+
+TARGET_SECTOR_KEYWORDS = [
+    # Defensa
+    "MINISTERIO DE DEFENSA", "ARMADA NACIONAL", "FUERZA AEREA", "FUERZA AEROESPACIAL", 
+    "EJERCITO NACIONAL", "COMANDO GENERAL DE LAS FUERZAS MILITARES", "DIMAR", 
+    "DIRECCION GENERAL MARITIMA", "AGENCIA LOGISTICA DE LAS FUERZAS MILITARES", 
+    "HOSPITAL MILITAR CENTRAL", "INDUMIL", "INDUSTRIA MILITAR", "CREMIL", 
+    "CAJA HONOR", "CAJA PROMOTORA DE VIVIENDA MILITAR", "DEFENSA CIVIL COLOMBIANA", 
+    "FORPO", "FONDO ROTATORIO DE LA POLICIA", "SUPERINTENDENCIA DE VIGILANCIA",
+    # TIC
+    "MINISTERIO DE TECNOLOGIAS DE LA INFORMACION", "MINTIC", "AGENCIA NACIONAL DEL ESPECTRO", 
+    "COMISION DE REGULACION DE COMUNICACIONES", "AGENCIA NACIONAL DIGITAL", "FUTIC", 
+    "RTVC", "INRAVISION", "SERVICIOS POSTALES NACIONALES", "4-72", "COMPUTADORES PARA EDUCAR",
+    # Inclusión Social
+    "PROSPERIDAD SOCIAL", "DEPARTAMENTO ADMINISTRATIVO PARA LA PROSPERIDAD SOCIAL", "DPS",
+    "UNIDAD PARA LA ATENCION Y REPARACION INTEGRAL A LAS VICTIMAS", "UARIV", "FONDO PARA LA REPARACION DE LAS VICTIMAS",
+    "CENTRO NACIONAL DE MEMORIA HISTORICA", "CNMH"
+]
 
 
-def fetch_national_documents(national_nits, limit=300):
-    """Fetch PDFs for National Order entities using multi-task partition offset."""
+def clean_nit(nit_str):
+    if not nit_str:
+        return ""
+    return re.sub(r'\D', '', str(nit_str))
+
+
+def fetch_national_documents(national_nits=None, limit=200):
+    """Fetch PDFs strictly for Sector Defensa, Sector TIC, and Sector Inclusión Social."""
     url = "https://www.datos.gov.co/resource/dmgg-8hin.json"
     
-    # Read task index from Cloud Run Jobs multi-task environment
     task_index = int(os.getenv("CLOUD_RUN_TASK_INDEX", "0"))
-    
-    # Assign distinct offset partition slice for each container task instance
-    task_partition_offset = (task_index * 1500) + (random.randint(0, 100) * 50)
+    task_partition_offset = (task_index * 1000) + (random.randint(0, 50) * 50)
     
     params = {
         "$where": "extensi_n = 'pdf' AND fecha_carga >= '2024-01-01T00:00:00'",
@@ -92,9 +133,14 @@ def fetch_national_documents(national_nits, limit=300):
                 records = resp.json()
                 filtered = []
                 for r in records:
-                    nit = r.get("nit_entidad", "")
+                    nit_raw = r.get("nit_entidad", "")
+                    nit_clean = clean_nit(nit_raw)
                     entidad = r.get("entidad", "").upper()
-                    if nit in national_nits or any(k in entidad for k in ["MINISTERIO", "SUPERINTENDENCIA", "AGENCIA", "DEPARTAMENTO ADMINISTRATIVO"]):
+                    
+                    is_nit_match = any(nit_clean.startswith(tn) for tn in TARGET_SECTOR_NITS)
+                    is_keyword_match = any(k in entidad for k in TARGET_SECTOR_KEYWORDS)
+                    
+                    if is_nit_match or is_keyword_match:
                         filtered.append(r)
                 return filtered
         except Exception as e:
@@ -134,7 +180,6 @@ def download_pdf_text(doc_url):
             )
             return res.text[:10000] if res and res.text else None
         else:
-            # Skip heavy multimodal OCR on large scanned PDFs to protect budget
             return None
     except Exception:
         return None
@@ -188,7 +233,7 @@ def process_single_document(doc):
     bq_client = get_bq_client()
     doc_id = doc.get("id_documento", str(uuid.uuid4().hex[:8]))
     proceso_id = doc.get("proceso", "")
-    entidad = doc.get("entidad", "Entidad Nacional")
+    entidad = doc.get("entidad", "Entidad Sector Objetivo")
     nit_entidad = doc.get("nit_entidad", "")
     nombre_archivo = doc.get("nombre_archivo", "documento.pdf")
     url_raw = doc.get("url_descarga_documento", {})
@@ -246,7 +291,7 @@ def process_single_document(doc):
                 "id_proceso": proceso_id,
                 "nombre_entidad": entidad,
                 "nit_entidad": nit_entidad,
-                "orden_entidad": "Nacional",
+                "orden_entidad": "Nacional - Sector Objetivo",
                 "tipo_documento": "Documento Anexo SECOP II",
                 "nombre_archivo": nombre_archivo,
                 "url_archivo": url_descarga,
@@ -264,14 +309,12 @@ def process_single_document(doc):
     return f"OK {doc_id}"
 
 
-def run(max_documents=200, max_workers=10):
+def run(max_documents=200, max_workers=5):
     task_idx = os.getenv("CLOUD_RUN_TASK_INDEX", "0")
-    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL ACELERADO (TAREA #{task_idx} - {max_workers} HILOS) en {PROJECT}.{DATASET} ===", flush=True)
-    national_nits = get_national_nits()
-    print(f"Encontrados {len(national_nits)} NITs del Orden Nacional.", flush=True)
+    print(f"=== INICIANDO PIPELINE DE INGESTA DOCUMENTAL ENFOCADO EN 3 SECTORES (TAREA #{task_idx} - {max_workers} HILOS) ===", flush=True)
     
-    docs = fetch_national_documents(national_nits, limit=max_documents*2)
-    print(f"Filtrados {len(docs)} documentos del Orden Nacional para procesar.", flush=True)
+    docs = fetch_national_documents(limit=max_documents*3)
+    print(f"Filtrados {len(docs)} documentos pertenecientes a Defensa, TIC e Inclusión Social.", flush=True)
     
     processed_count = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -284,9 +327,9 @@ def run(max_documents=200, max_workers=10):
             except Exception as e:
                 print(f"  [ERR] Excepción en hilo: {e}", flush=True)
                 
-    print(f"\n=== PIPELINE PARALELO COMPLETADO (TAREA #{task_idx}): {processed_count} documentos procesados con {max_workers} hilos concurrente ===", flush=True)
+    print(f"\n=== PIPELINE SECTORES OBJETIVO COMPLETADO (TAREA #{task_idx}): {processed_count} documentos procesados ===", flush=True)
 
 if __name__ == "__main__":
-    max_docs = int(os.getenv("MAX_DOCUMENTS", "1000000"))
-    max_workers = int(os.getenv("MAX_WORKERS", "4"))
+    max_docs = int(os.getenv("MAX_DOCUMENTS", "200"))
+    max_workers = int(os.getenv("MAX_WORKERS", "5"))
     run(max_documents=max_docs, max_workers=max_workers)

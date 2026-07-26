@@ -17,20 +17,21 @@ PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
 DATASET = os.getenv("BQ_DATASET", "secop")
 
 def _make_no_keepalive_session(credentials):
-    """Build an AuthorizedSession that forces Connection: close on every request,
+    """Build an AuthorizedSession that forces Connection: close and disables pool reuse,
     preventing stale keep-alive TLS socket errors on Cloud Run."""
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    
     session = AuthorizedSession(credentials)
     session.headers.update({"Connection": "close"})
-    # Also disable urllib3's connection pool reuse
-    adapter = session.get_adapter("https://")
-    if hasattr(adapter, "max_retries"):
-        import urllib3
-        adapter.max_retries = urllib3.util.retry.Retry(
-            total=1,
-            connect=1,
-            read=1,
-            raise_on_status=False
-        )
+    
+    adapter = HTTPAdapter(
+        pool_connections=0,
+        pool_maxsize=0,
+        max_retries=Retry(total=3, backoff_factor=0.2, raise_on_status=False)
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
     return session
 
 
@@ -58,7 +59,14 @@ def get_client():
 
     return bigquery.Client(project=PROJECT)
 
-client = get_client()
+class _ClientProxy:
+    """Dynamic proxy that delegates every call to a fresh get_client() instance,
+    guaranteeing no stale socket retention across requests on Cloud Run."""
+    def __getattr__(self, name):
+        fresh_client = get_client()
+        return getattr(fresh_client, name)
+
+client = _ClientProxy()
 
 # Placeholder provider names to always exclude from results
 JUNK_PROVIDERS = (

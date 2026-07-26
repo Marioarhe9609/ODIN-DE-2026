@@ -294,11 +294,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Error fetching memory rules: {e}")
 
-    try:
-        response = await get_agent_response(user_id, agent_msg)
-    except Exception as ex_gen:
-        logger.error(f"Error in handle_message: {ex_gen}", exc_info=True)
-        response = "⚠️ Ocurrió un inconveniente técnico al procesar tu consulta. Por favor intenta nuevamente."
+        try:
+            response = await get_agent_response(user_id, agent_msg)
+        except Exception as ex_gen:
+            logger.error(f"Error in handle_message: {ex_gen}", exc_info=True)
+            response = "⚠️ Ocurrió un inconveniente técnico al procesar tu consulta. Por favor intenta nuevamente."
 
     # Extract chart markers from response
         chart_markers = re.findall(r'\[CHART:(\w+)\]', response)

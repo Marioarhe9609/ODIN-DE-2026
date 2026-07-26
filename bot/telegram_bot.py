@@ -278,9 +278,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         import time
         now = time.time()
         if now - MEMORY_CACHE.get("last_fetched", 0) > 60:
-            from google.cloud import bigquery
-            from agent.bq_client import PROJECT, DATASET
-            client = bigquery.Client(project=PROJECT)
+            from agent.bq_client import PROJECT, DATASET, get_client
+            client = get_client()
             try:
                 mem_rows = client.query(f"SELECT regla FROM `{PROJECT}.{DATASET}.memoria_odin`").result()
                 MEMORY_CACHE["rules"] = [r.regla for r in mem_rows]

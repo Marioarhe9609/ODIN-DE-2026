@@ -614,16 +614,21 @@ def main():
                 return web.Response(text="OK")
             
             active_update_ids.add(up_id)
-            try:
-                # Process update synchronously in order to complete before returning 200 OK
-                await app.process_update(update)
-                processed_update_ids.add(up_id)
-                if len(processed_update_ids) > 500:
-                    processed_update_ids.discard(min(processed_update_ids))
-            finally:
-                active_update_ids.discard(up_id)
-                
-            logger.info(f"Finished processing webhook update ID: {up_id}")
+            
+            async def process_async(u, uid):
+                try:
+                    await app.process_update(u)
+                    processed_update_ids.add(uid)
+                    if len(processed_update_ids) > 500:
+                        processed_update_ids.discard(min(processed_update_ids))
+                except Exception as ex_proc:
+                    logger.error(f"Error processing update {uid}: {ex_proc}", exc_info=True)
+                finally:
+                    active_update_ids.discard(uid)
+
+            asyncio.create_task(process_async(update, up_id))
+            
+            logger.info(f"Queued webhook update ID for async execution: {up_id}")
         except Exception as e:
             logger.error(f"Error in webhook handler: {e}", exc_info=True)
         return web.Response(text="OK")

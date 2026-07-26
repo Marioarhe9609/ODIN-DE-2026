@@ -8,9 +8,20 @@ from google.adk.sessions.base_session_service import BaseSessionService, GetSess
 from google.adk.sessions.session import Session
 from google.adk.events.event import Event
 from google.cloud import bigquery
-from agent.bq_client import client, PROJECT, DATASET
+import agent.bq_client as bq_module
+from agent.bq_client import get_client, PROJECT, DATASET
 
 logger = logging.getLogger("bq_session_service")
+
+def _execute_query(sql: str, job_config=None):
+    """Execute a BigQuery query with automatic socket refresh retry on error."""
+    try:
+        return list(bq_module.client.query(sql, job_config=job_config).result())
+    except Exception as e:
+        logger.warning(f"Session query encountered socket error ({e}). Recreating BigQuery client and retrying...")
+        bq_module.client = get_client()
+        return list(bq_module.client.query(sql, job_config=job_config).result())
+
 
 class BigQuerySessionService(BaseSessionService):
     def __init__(self):
@@ -28,7 +39,7 @@ class BigQuerySessionService(BaseSessionService):
                 update_time TIMESTAMP
             )
             """
-            client.query(sql).result()
+            _execute_query(sql)
             logger.info(f"BigQuery session table verified: {self.table_ref}")
         except Exception as e:
             logger.error(f"Failed to create/verify session table in BigQuery: {e}")
@@ -69,7 +80,7 @@ class BigQuerySessionService(BaseSessionService):
             ]
         )
         try:
-            rows = list(client.query(sql, job_config=job_config).result())
+            rows = _execute_query(sql, job_config=job_config)
             if not rows:
                 return None
             session_json = rows[0]["session_json"]
@@ -105,7 +116,7 @@ class BigQuerySessionService(BaseSessionService):
             ]
         )
         try:
-            client.query(sql, job_config=job_config).result()
+            _execute_query(sql, job_config=job_config)
             logger.info(f"Deleted session key {key} from BigQuery")
         except Exception as e:
             logger.error(f"Error deleting session {key} from BigQuery: {e}")
@@ -122,7 +133,7 @@ class BigQuerySessionService(BaseSessionService):
             
         job_config = bigquery.QueryJobConfig(query_parameters=params)
         try:
-            rows = list(client.query(sql, job_config=job_config).result())
+            rows = _execute_query(sql, job_config=job_config)
             sessions = []
             for r in rows:
                 sessions.append(Session.model_validate_json(r["session_json"]))
@@ -153,6 +164,6 @@ class BigQuerySessionService(BaseSessionService):
             ]
         )
         try:
-            client.query(sql, job_config=job_config).result()
+            _execute_query(sql, job_config=job_config)
         except Exception as e:
             logger.error(f"Error saving session {key} to BigQuery: {e}")

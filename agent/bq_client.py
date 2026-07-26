@@ -165,12 +165,20 @@ def safe_like(column: str, value: str) -> str:
     return f"({' AND '.join(word_conds)})"
 
 def query(sql: str, max_rows: int = 50, timeout_sec: float = 30) -> list[dict]:
-    """Run a BigQuery SQL query and return results as list of dicts."""
-    job = client.query(sql)
+    """Run a BigQuery SQL query and return results as list of dicts. Auto-reconnects on socket error."""
+    global client
     try:
+        job = client.query(sql)
         rows = list(job.result(max_results=max_rows, timeout=timeout_sec))
         return [dict(r) for r in rows]
     except Exception as e:
+        # If connection was dropped by Cloud Run, recreate client and retry once
+        err_str = str(e).lower()
+        if "ssl" in err_str or "connection" in err_str or "eof" in err_str or "remote" in err_str:
+            client = get_client()
+            job = client.query(sql)
+            rows = list(job.result(max_results=max_rows, timeout=timeout_sec))
+            return [dict(r) for r in rows]
         # Cancel the job if it's still running
         try:
             job.cancel()

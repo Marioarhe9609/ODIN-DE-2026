@@ -9,7 +9,23 @@ generated_excels_var = contextvars.ContextVar("generated_excels_var", default=No
 
 PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
 DATASET = os.getenv("BQ_DATASET", "secop")
-client = bigquery.Client(project=PROJECT)
+
+def get_client():
+    """Return resilient BigQuery client with local token fallback."""
+    try:
+        import subprocess
+        from google.oauth2.credentials import Credentials
+        cmd = ["gcloud.cmd", "auth", "print-access-token"] if os.name == 'nt' else ["gcloud", "auth", "print-access-token"]
+        token = subprocess.run(cmd, capture_output=True, text=True, shell=True).stdout.strip()
+        if token and len(token) > 20:
+            credentials = Credentials(token)
+            return bigquery.Client(project=PROJECT, credentials=credentials)
+    except Exception:
+        pass
+        
+    return bigquery.Client(project=PROJECT)
+
+client = get_client()
 
 # Placeholder provider names to always exclude from results
 JUNK_PROVIDERS = (

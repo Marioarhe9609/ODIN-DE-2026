@@ -987,7 +987,7 @@ def consultar_auditoria_entregables(entidad: str = "", estado: str = "", id_cont
       a.alerta_aceptado_sin_implementar,
       a.evidencia_encontrada AS nombre_archivo,
       e.url_archivo AS url_archivo,
-      c.url_proceso AS url_proceso
+      c.urlproceso AS url_proceso
     FROM `{PROJECT}.{DATASET}.contratos_auditoria_entregables` a
     LEFT JOIN `{PROJECT}.{DATASET}.contratos_electronicos` c
       ON a.id_contrato = c.id_contrato OR a.id_contrato = c.proceso_de_compra

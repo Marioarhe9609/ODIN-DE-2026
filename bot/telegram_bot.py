@@ -620,12 +620,17 @@ def main():
             
             async def process_async(u, uid):
                 try:
+                    user_id = u.effective_user.id if u.effective_user else (u.effective_chat.id if u.effective_chat else "unknown")
+                    user_text = u.effective_message.text if (u.effective_message and u.effective_message.text) else "Non-text message"
+                    logger.info(f"Start processing webhook update ID {uid} from user {user_id}: '{user_text}'")
+                    
                     await app.process_update(u)
                     processed_update_ids.add(uid)
                     if len(processed_update_ids) > 500:
                         processed_update_ids.discard(min(processed_update_ids))
+                    logger.info(f"Successfully completed processing webhook update ID {uid}")
                 except Exception as ex_proc:
-                    logger.error(f"Error processing update {uid}: {ex_proc}", exc_info=True)
+                    logger.error(f"Error processing webhook update {uid}: {ex_proc}", exc_info=True)
                 finally:
                     active_update_ids.discard(uid)
 

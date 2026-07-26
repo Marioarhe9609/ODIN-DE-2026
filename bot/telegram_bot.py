@@ -369,19 +369,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Send text response
         try:
-            if len(display_text) > 4000:
-                for i in range(0, len(display_text), 4000):
-                    is_last = (i + 4000 >= len(display_text))
-                    markup = reply_markup if is_last else None
+            target_msg = update.effective_message or update.message
+            chat_id = update.effective_chat.id if update.effective_chat else None
+            
+            if target_msg:
+                if len(display_text) > 4000:
+                    for i in range(0, len(display_text), 4000):
+                        is_last = (i + 4000 >= len(display_text))
+                        markup = reply_markup if is_last else None
+                        try:
+                            await target_msg.reply_text(display_text[i:i+4000], reply_markup=markup, parse_mode="Markdown")
+                        except Exception:
+                            await target_msg.reply_text(display_text[i:i+4000], reply_markup=markup)
+                else:
                     try:
-                        await update.message.reply_text(display_text[i:i+4000], reply_markup=markup, parse_mode="Markdown")
+                        await target_msg.reply_text(display_text, reply_markup=reply_markup, parse_mode="Markdown")
                     except Exception:
-                        await update.message.reply_text(display_text[i:i+4000], reply_markup=markup)
-            else:
-                try:
-                    await update.message.reply_text(display_text, reply_markup=reply_markup, parse_mode="Markdown")
-                except Exception:
-                    await update.message.reply_text(display_text, reply_markup=reply_markup)
+                        await target_msg.reply_text(display_text, reply_markup=reply_markup)
+            elif chat_id:
+                await app.bot.send_message(chat_id=chat_id, text=display_text)
         except Exception as err_send:
             logger.error(f"Error sending message to telegram: {err_send}", exc_info=True)
 
@@ -392,36 +398,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if should_pdf:
             try:
-                await update.message.chat.send_action("upload_document")
-                title = "Informe Odin"
-                resp_up = response.upper()
-                if "DIAGNOSTICO" in resp_up:
-                    title = "Diagnostico de Riesgo"
-                elif "EJECUCION" in resp_up or "PRESUPUEST" in resp_up:
-                    title = "Ejecucion Presupuestal"
-                elif "CONTRATISTA" in resp_up or "PROVEEDOR" in resp_up:
-                    title = "Perfil de Contratista"
-                elif "MONOPOL" in resp_up or "CORRUPCION" in resp_up:
-                    title = "Alerta Anticorrupcion"
+                target_msg = update.effective_message or update.message
+                if target_msg:
+                    title = "Informe Odin"
+                    resp_up = response.upper()
+                    if "DIAGNOSTICO" in resp_up:
+                        title = "Diagnostico de Riesgo"
+                    elif "EJECUCION" in resp_up or "PRESUPUEST" in resp_up:
+                        title = "Ejecucion Presupuestal"
+                    elif "CONTRATISTA" in resp_up or "PROVEEDOR" in resp_up:
+                        title = "Perfil de Contratista"
+                    elif "MONOPOL" in resp_up or "CORRUPCION" in resp_up:
+                        title = "Alerta Anticorrupcion"
 
-                filepath = generate_pdf(response, title, chart_paths)
-                with open(filepath, "rb") as f:
-                    await update.message.reply_document(
-                        document=f,
-                        filename=f"odin_{title.lower().replace(' ', '_')}.pdf",
-                        caption=f"📄 {title}",
-                    )
-                os.remove(filepath)
-                # Cleanup chart files
-                for cp in chart_paths.values():
-                    try: os.remove(cp)
-                    except: pass
-                logger.info(f"PDF sent to {user_id} ({len(chart_paths)} charts)")
+                    filepath = generate_pdf(response, title, chart_paths)
+                    with open(filepath, "rb") as f:
+                        await target_msg.reply_document(
+                            document=f,
+                            filename=f"odin_{title.lower().replace(' ', '_')}.pdf",
+                            caption=f"📄 {title}",
+                        )
+                    os.remove(filepath)
+                    for cp in chart_paths.values():
+                        try: os.remove(cp)
+                        except Exception: pass
+                    logger.info(f"PDF sent to {user_id} ({len(chart_paths)} charts)")
             except Exception as e:
                 logger.error(f"PDF error: {e}", exc_info=True)
-                await update.message.reply_text(
-                    "⚠️ No pude generar el PDF. El informe ya fue enviado como texto."
-                )
 
         # Send Excel file(s) if user requested
         if send_excel and excels_list:

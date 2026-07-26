@@ -291,12 +291,14 @@ def generar_red_consorcios(titulo: str, central_node: str, nodes: dict, edges: l
     ax.set_facecolor(BG)
 
     # Dibujar enlaces
-    max_weight = max(w for u, v, w in edges) if edges else 1
+    num_weights = [w if isinstance(w, (int, float)) else 1 for u, v, w in edges]
+    max_weight = max(num_weights) if num_weights else 1
     for u, v, w in edges:
         if u in pos and v in pos:
             x1, y1 = pos[u]
             x2, y2 = pos[v]
-            lw = 1 + 4 * (w / max_weight)
+            w_num = w if isinstance(w, (int, float)) else 1
+            lw = 1 + 4 * (w_num / max_weight)
             ax.plot([x1, x2], [y1, y2], color='#6366f1', alpha=0.35, linewidth=lw, zorder=1)
             
             # Etiqueta del enlace en la mitad
@@ -304,107 +306,120 @@ def generar_red_consorcios(titulo: str, central_node: str, nodes: dict, edges: l
             ax.text(mx, my, f"{w}", color='#94a3b8', fontsize=6, ha='center', va='center',
                     bbox=dict(facecolor='#1e293b', edgecolor='none', alpha=0.8, boxstyle='round,pad=0.2'), zorder=2)
 
-    # Dibujar nodos y etiquetas
-    max_val = max(nodes[n].get('val', 0) or 0 for n in unique_nodes) if unique_nodes else 1
-    for node in unique_nodes:
-        x, y = pos[node]
-        val = nodes[node].get('val', 0) or 0
-        size_factor = (val / max_val) if max_val > 0 else 0
-        size = 120 + size_factor * 300
-        
-        if node == central_node:
-            color = '#f97316' # Naranja para el centro
-            edgecolor = '#f8fafc'
-        else:
-            color = '#38bdf8' # Cian para socios
-            edgecolor = '#334155'
-            
-        ax.scatter([x], [y], s=[size], color=color, edgecolors=edgecolor, linewidths=1.2, zorder=3)
-        
-        # Calcular offset para la etiqueta
-        if x == 0 and y == 0:
-            ox, oy = 0, -0.15
-            ha, va = 'center', 'top'
-        else:
-            dist = np.sqrt(x*x + y*y)
-            ox, oy = 0.12 * (x / dist), 0.12 * (y / dist)
-            ha = 'left' if x > 0 else 'right'
-            va = 'center'
-            
-        # Formatear etiqueta
-        label = node[:16] + '...' if len(node) > 16 else node
-        if val >= 1e12:
-            val_str = f"${val/1e12:.1f}T COP"
-        elif val >= 1e9:
-            val_str = f"${val/1e9:.1f}B"
-        elif val >= 1e6:
-            val_str = f"${val/1e6:.1f}M"
-        else:
-            val_str = f"${val:,.0f}"
-            
-        contr = nodes[node].get('contr', 0)
-        lbl_text = f"{label}\n{val_str}\n({contr} contr.)"
-        
-        ax.text(x + ox, y + oy, lbl_text, color='#f8fafc', fontsize=6, ha=ha, va=va,
-                bbox=dict(facecolor='#1e293b', edgecolor='#334155', alpha=0.85, boxstyle='round,pad=0.2'), zorder=4)
-
-    ax.set_xlim(-1.4, 1.4)
-    ax.set_ylim(-1.4, 1.4)
-    ax.axis('off')
-    ax.set_title(titulo, color=WHITE, fontsize=10, fontweight='bold', pad=12)
-    plt.tight_layout(pad=1.5)
-    
-    marker = _save(fig, plt)
-    
-    try:
-        import json
-        cid = marker.replace("[CHART:", "").replace("]", "")
-        cy_elements = []
+        # Dibujar nodos y etiquetas
+        max_val = max(nodes[n].get('val', 0) or 0 for n in unique_nodes) if unique_nodes else 1
         for node in unique_nodes:
+            x, y = pos[node]
             val = nodes[node].get('val', 0) or 0
-            contr = nodes[node].get('contr', 0)
-            if node == central_node:
-                color = '#f97316'
-                size = 45
+            ntype = nodes[node].get('type', '')
+            size_factor = (val / max_val) if max_val > 0 else 0
+            size = 120 + size_factor * 300
+            
+            if ntype == 'contrato' or 'CO1.' in node:
+                color = '#a855f7' # Violeta para nodos contrato
+                edgecolor = '#c084fc'
+            elif node == central_node or ntype == 'entidad':
+                color = '#f97316' # Naranja para la entidad central
+                edgecolor = '#f8fafc'
             else:
-                color = '#38bdf8'
-                size = 30
+                color = '#38bdf8' # Cian para proveedores
+                edgecolor = '#334155'
                 
-            if val >= 1e12: val_str = f"${val/1e12:.1f}T COP"
-            elif val >= 1e9: val_str = f"${val/1e9:.1f}B"
-            elif val >= 1e6: val_str = f"${val/1e6:.1f}M"
-            else: val_str = f"${val:,.0f} COP"
+            ax.scatter([x], [y], s=[size], color=color, edgecolors=edgecolor, linewidths=1.2, zorder=3)
             
-            cy_elements.append({
-                "data": {
-                    "id": node,
-                    "label": node[:15] + '...' if len(node) > 15 else node,
-                    "size": size,
-                    "color": color,
-                    "edgecolor": '#334155',
-                    "val": val_str,
-                    "contr": f"{contr} contratos"
-                }
-            })
+            # Calcular offset para la etiqueta
+            if x == 0 and y == 0:
+                ox, oy = 0, -0.15
+                ha, va = 'center', 'top'
+            else:
+                dist = np.sqrt(x*x + y*y)
+                ox, oy = 0.12 * (x / dist), 0.12 * (y / dist)
+                ha = 'left' if x > 0 else 'right'
+                va = 'center'
+                
+            # Formatear etiqueta
+            label = node[:16] + '...' if len(node) > 16 else node
+            if val >= 1e12:
+                val_str = f"${val/1e12:.1f}T COP"
+            elif val >= 1e9:
+                val_str = f"${val/1e9:.1f}B"
+            elif val >= 1e6:
+                val_str = f"${val/1e6:.1f}M"
+            else:
+                val_str = f"${val:,.0f}"
+                
+            contr = nodes[node].get('contr', 0)
+            if contr > 0:
+                lbl_text = f"{label}\n{val_str}\n({contr} contr.)"
+            else:
+                lbl_text = f"{label}\n{val_str}"
             
-        for u, v, w in edges:
-            cy_elements.append({
-                "data": {
-                    "id": f"{u}_{v}",
-                    "source": u,
-                    "target": v,
-                    "weight": w,
-                    "label": f"{w} conexiones"
-                }
-            })
-            
-        json_path = os.path.join(CHART_DIR, f"chart_{cid}.json")
-        with open(json_path, "w", encoding="utf-8") as jf:
-            json.dump(cy_elements, jf, ensure_ascii=True, separators=(',', ':'))
-    except Exception:
-        pass
+            ax.text(x + ox, y + oy, lbl_text, color='#f8fafc', fontsize=6, ha=ha, va=va,
+                    bbox=dict(facecolor='#1e293b', edgecolor='#334155', alpha=0.85, boxstyle='round,pad=0.2'), zorder=4)
+
+        ax.set_xlim(-1.4, 1.4)
+        ax.set_ylim(-1.4, 1.4)
+        ax.axis('off')
+        ax.set_title(titulo, color=WHITE, fontsize=10, fontweight='bold', pad=12)
+        plt.tight_layout(pad=1.5)
         
-    return marker
+        marker = _save(fig, plt)
+        
+        try:
+            import json
+            cid = marker.replace("[CHART:", "").replace("]", "")
+            cy_elements = []
+            for node in unique_nodes:
+                val = nodes[node].get('val', 0) or 0
+                contr = nodes[node].get('contr', 0)
+                ntype = nodes[node].get('type', '')
+                
+                if ntype == 'contrato' or 'CO1.' in node:
+                    color = '#a855f7' # Violeta
+                    size = 28
+                elif node == central_node or ntype == 'entidad':
+                    color = '#f97316' # Naranja
+                    size = 45
+                else:
+                    color = '#38bdf8' # Cian
+                    size = 32
+                    
+                if val >= 1e12: val_str = f"${val/1e12:.1f}T COP"
+                elif val >= 1e9: val_str = f"${val/1e9:.1f}B"
+                elif val >= 1e6: val_str = f"${val/1e6:.1f}M"
+                else: val_str = f"${val:,.0f} COP"
+                
+                contr_lbl = f"{contr} contratos" if contr > 0 else "Contrato Específico"
+                cy_elements.append({
+                    "data": {
+                        "id": node,
+                        "label": node[:15] + '...' if len(node) > 15 else node,
+                        "size": size,
+                        "color": color,
+                        "edgecolor": '#334155',
+                        "val": val_str,
+                        "contr": contr_lbl
+                    }
+                })
+                
+            for u, v, w in edges:
+                cy_elements.append({
+                    "data": {
+                        "id": f"{u}_{v}",
+                        "source": u,
+                        "target": v,
+                        "weight": w,
+                        "label": f"{w} conexiones" if isinstance(w, (int, float)) else str(w)
+                    }
+                })
+                
+            json_path = os.path.join(CHART_DIR, f"chart_{cid}.json")
+            with open(json_path, "w", encoding="utf-8") as jf:
+                json.dump(cy_elements, jf, ensure_ascii=True, separators=(',', ':'))
+        except Exception:
+            pass
+            
+        return marker
 
 
 def get_chart_path(chart_id: str) -> str:
@@ -424,6 +439,20 @@ def generar_grafo_supervisores(titulo: str, central_node: str, nodes: dict, edge
     return generar_red_consorcios(titulo=titulo, central_node=central_node, nodes=nodes, edges=edges)
 
 
+def generar_grafo_contratos_detallado(titulo: str, central_node: str, nodes: dict, edges: list) -> str:
+    """Genera un grafo de red interactivo desglosado contrato por contrato conectando Entidad -> Contrato -> Proveedor.
+    USAR OBLIGATORIAMENTE cuando el usuario pida ver los contratos especificos o el desglose de contratos como nodos en la red.
+    Args:
+        titulo: Título descriptivo de la red.
+        central_node: Nombre de la entidad o contratista central.
+        nodes: Diccionario de ID_Nodo -> {"val": monto, "contr": num, "type": "entidad"|"contrato"|"proveedor"}.
+               Ej: {"Unidad para Victimas": {"type": "entidad", "val": 5000000}, "CO1.PCCNTR.12345": {"type": "contrato", "val": 2000000}, "Proveedor SAC": {"type": "proveedor", "val": 2000000}}
+        edges: Lista de conexiones (origen, destino, peso_o_descripcion).
+               Ej: [("Unidad para Victimas", "CO1.PCCNTR.12345", 1), ("CO1.PCCNTR.12345", "Proveedor SAC", 1)]
+    """
+    return generar_red_consorcios(titulo=titulo, central_node=central_node, nodes=nodes, edges=edges)
+
+
 TOOLS = [
     generar_grafico_barras,
     generar_grafico_dona,
@@ -432,4 +461,5 @@ TOOLS = [
     generar_grafico_medidor,
     generar_red_consorcios,
     generar_grafo_supervisores,
+    generar_grafo_contratos_detallado,
 ]

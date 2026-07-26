@@ -7,6 +7,17 @@ import sys
 # Add parent to path first to allow absolute imports of agent module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# ─── CRITICAL: Patch AuthorizedSession BEFORE any Google Cloud import ────────
+# Cloud Run uses keep-alive sockets that expire and cause SSL EOF errors.
+# Forcing Connection: close on every google-auth request eliminates 2-3 min hangs.
+from google.auth.transport.requests import AuthorizedSession as _AS
+_orig_as_init = _AS.__init__
+def _patch_as_init(self, *args, **kwargs):
+    _orig_as_init(self, *args, **kwargs)
+    self.headers.update({"Connection": "close"})
+_AS.__init__ = _patch_as_init
+# ─────────────────────────────────────────────────────────────────────────────
+
 import asyncio
 import logging
 import tempfile

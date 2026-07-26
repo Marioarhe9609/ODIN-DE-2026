@@ -611,25 +611,21 @@ def main():
             
             active_update_ids.add(up_id)
             
-            async def process_async(u, uid):
-                try:
-                    user_id = u.effective_user.id if u.effective_user else (u.effective_chat.id if u.effective_chat else "unknown")
-                    user_text = u.effective_message.text if (u.effective_message and u.effective_message.text) else "Non-text message"
-                    logger.info(f"Start processing webhook update ID {uid} from user {user_id}: '{user_text}'")
-                    
-                    await app.process_update(u)
-                    processed_update_ids.add(uid)
-                    if len(processed_update_ids) > 500:
-                        processed_update_ids.discard(min(processed_update_ids))
-                    logger.info(f"Successfully completed processing webhook update ID {uid}")
-                except Exception as ex_proc:
-                    logger.error(f"Error processing webhook update {uid}: {ex_proc}", exc_info=True)
-                finally:
-                    active_update_ids.discard(uid)
-
-            asyncio.create_task(process_async(update, up_id))
-            
-            logger.info(f"Queued webhook update ID for async execution: {up_id}")
+            try:
+                user_id = update.effective_user.id if update.effective_user else (update.effective_chat.id if update.effective_chat else "unknown")
+                user_text = update.effective_message.text if (update.effective_message and update.effective_message.text) else "Non-text message"
+                logger.info(f"Start processing webhook update ID {up_id} from user {user_id}: '{user_text}'")
+                
+                await app.process_update(update)
+                processed_update_ids.add(up_id)
+                if len(processed_update_ids) > 500:
+                    processed_update_ids.discard(min(processed_update_ids))
+                logger.info(f"Successfully completed processing webhook update ID {up_id}")
+            except Exception as ex_proc:
+                logger.error(f"Error processing webhook update {up_id}: {ex_proc}", exc_info=True)
+            finally:
+                active_update_ids.discard(up_id)
+                
         except Exception as e:
             logger.error(f"Error in webhook handler: {e}", exc_info=True)
         return web.Response(text="OK")

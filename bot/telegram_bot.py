@@ -16,6 +16,21 @@ def _patch_as_init(self, *args, **kwargs):
     _orig_as_init(self, *args, **kwargs)
     self.headers.update({"Connection": "close"})
 _AS.__init__ = _patch_as_init
+
+# Also patch urllib3 at the socket level to prevent stale keep-alive TLS sessions
+try:
+    import urllib3 as _urllib3
+    _orig_urlopen = _urllib3.HTTPConnectionPool.urlopen
+    def _patch_urlopen(self, method, url, *a, **kw):
+        h = kw.get("headers") or {}
+        if isinstance(h, dict):
+            h["Connection"] = "close"
+            kw["headers"] = h
+        return _orig_urlopen(self, method, url, *a, **kw)
+    _urllib3.HTTPConnectionPool.urlopen = _patch_urlopen
+    _urllib3.HTTPSConnectionPool.urlopen = _patch_urlopen
+except Exception:
+    pass
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio

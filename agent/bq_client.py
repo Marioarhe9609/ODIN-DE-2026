@@ -1,6 +1,16 @@
 """Odin v2 - Shared BigQuery client and query helpers."""
-from google.cloud import bigquery
 import os
+import google.auth
+from google.auth.transport.requests import AuthorizedSession
+
+# Patch AuthorizedSession to use Connection: close, preventing Cloud Run stale SSL keep-alive socket drops
+_orig_auth_init = AuthorizedSession.__init__
+def _patched_auth_init(self, *args, **kwargs):
+    _orig_auth_init(self, *args, **kwargs)
+    self.headers.update({"Connection": "close"})
+AuthorizedSession.__init__ = _patched_auth_init
+
+from google.cloud import bigquery
 import unicodedata
 import contextvars
 

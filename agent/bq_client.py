@@ -127,28 +127,42 @@ def strip_accents(text: str) -> str:
     return ''.join(c for c in nfkd if not unicodedata.combining(c))
 
 
+STOP_WORDS = {
+    'de', 'del', 'la', 'las', 'los', 'el', 'para', 'por', 'y', 'a', 'en', 'con',
+    'su', 'sus', 'al', 'lo', 'como', 'mas', 'pero', 'un', 'una', 'unos', 'unas',
+    'especial', 'nacional', 'general', 'republica'
+}
+
+
 def safe_like(column: str, value: str) -> str:
-    """Build an ultra-fast LIKE clause that works regardless of accents/case and
-    automatically expands acronyms/synonyms (e.g. Mindefensa -> Ministerio de Defensa Nacional)."""
-    clean = strip_accents(value.lower()).replace("'", "''")
+    """Build an ultra-fast, robust SQL condition that matches ANY entity in Colombia.
+    Automatically handles accents, stop-words, inserted terms (e.g. 'Unidad para las Víctimas'
+    -> 'UARIV-UNIDAD PARA LA ATENCION Y REPARACION...'), acronyms, and fuzzy variations.
+    """
+    clean = strip_accents(value.lower()).strip()
     val_upper = strip_accents(value.upper()).strip()
     
-    terms = [clean]
+    # 1. Check exact acronym match from ENTITY_SYNONYMS table
+    synonym_terms = []
     for k, aliases in ENTITY_SYNONYMS.items():
-        if k in val_upper or val_upper in k:
+        if k == val_upper:
             for alias in aliases:
                 c_alias = strip_accents(alias.lower()).replace("'", "''")
-                if c_alias not in terms:
-                    terms.append(c_alias)
+                if c_alias not in synonym_terms:
+                    synonym_terms.append(c_alias)
                     
-    if len(terms) == 1:
-        return f"LOWER({column}) LIKE '%{terms[0]}%'"
-    
-    or_clauses = [
-        f"LOWER({column}) LIKE '%{t}%'"
-        for t in terms
-    ]
-    return f"({' OR '.join(or_clauses)})"
+    if synonym_terms:
+        conds = [f"LOWER({column}) LIKE '%{t}%'" for t in synonym_terms]
+        return f"({' OR '.join(conds)})"
+
+    # 2. General keyword-based fuzzy matching for any Colombian entity
+    words = re.findall(r'\b[a-z0-9]+\b', clean)
+    sig_words = [w.replace("'", "''") for w in words if w not in STOP_WORDS and len(w) > 1]
+    if not sig_words:
+        sig_words = [w.replace("'", "''") for w in words] if words else [clean]
+        
+    word_conds = [f"LOWER({column}) LIKE '%{w}%'" for w in sig_words]
+    return f"({' AND '.join(word_conds)})"
 
 def query(sql: str, max_rows: int = 50, timeout_sec: float = 30) -> list[dict]:
     """Run a BigQuery SQL query and return results as list of dicts."""

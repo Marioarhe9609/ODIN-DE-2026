@@ -36,6 +36,31 @@ JUNK_PROVIDERS = (
 JUNK_FILTER_SQL = "AND LOWER(proveedor_adjudicado) NOT IN ('sin descripcion', 'sindescripcion', 'sindesca', 'sin descripción', 'no definido', 'no aplica', 'ninguno', 'n/a', 'na', '.', '-', '0')"
 
 
+# Colombian Entity Acronyms & Synonyms mapping for intelligent fuzzy matching
+ENTITY_SYNONYMS = {
+    'MINDEFENSA': ['MINISTERIO DE DEFENSA', 'DEFENSA NACIONAL', 'MINDEF', '899999003'],
+    'MINDEF': ['MINISTERIO DE DEFENSA', 'DEFENSA NACIONAL', 'MINDEFENSA', '899999003'],
+    'MINTIC': ['MINISTERIO DE TECNOLOGIAS DE LA INFORMACION', 'TECNOLOGIAS DE LA INFORMACION Y LAS COMUNICACIONES', '899999053'],
+    'DPS': ['PROSPERIDAD SOCIAL', '900097800'],
+    'UARIV': ['UNIDAD DE ATENCION Y REPARACION INTEGRAL', 'VICTIMAS', '900490473'],
+    'SENA': ['SERVICIO NACIONAL DE APRENDIZAJE', '899999034'],
+    'INPEC': ['INSTITUTO NACIONAL PENITENCIARIO', '800215546'],
+    'FAC': ['FUERZA AEREA', 'FUERZA AÉREA'],
+    'PONAL': ['POLICIA NACIONAL', 'POLICÍA NACIONAL'],
+    'EJERCITO': ['EJERCITO NACIONAL', 'EJÉRCITO NACIONAL'],
+    'ARMADA': ['ARMADA NACIONAL'],
+    'DIAN': ['DIRECCION DE IMPUESTOS Y ADUANAS NACIONALES', '800197268'],
+    'IGAC': ['INSTITUTO GEOGRAFICO AGUSTIN CODAZZI', '899999004'],
+    'ICBF': ['INSTITUTO COLOMBIANO DE BIENESTAR FAMILIAR', '899999239'],
+    'DNP': ['DEPARTAMENTO NACIONAL DE PLANEACION', '899999038'],
+    'DANE': ['DEPARTAMENTO ADMINISTRATIVO NACIONAL DE ESTADISTICA', '899999054'],
+    'AND': ['AGENCIA NACIONAL DE DEFENSA JURIDICA', '901144049'],
+    'ANE': ['AGENCIA NACIONAL DEL ESPECTRO', '900334265'],
+    'CRC': ['COMISION DE REGULACION DE COMUNICACIONES', '830002593'],
+    'RTVC': ['RADIO TELEVISION NACIONAL DE COLOMBIA', '900002583'],
+}
+
+
 def strip_accents(text: str) -> str:
     """Remove accents/tildes from text for search matching."""
     nfkd = unicodedata.normalize('NFKD', text)
@@ -44,10 +69,28 @@ def strip_accents(text: str) -> str:
 
 def safe_like(column: str, value: str) -> str:
     """Build a LIKE clause that works regardless of accents/tildes.
-    Uses BigQuery NORMALIZE + REGEXP_REPLACE to strip diacritics on both sides."""
+    Uses BigQuery NORMALIZE + REGEXP_REPLACE to strip diacritics and automatically
+    expands acronyms/synonyms (e.g. Mindefensa -> Ministerio de Defensa Nacional)."""
     clean = strip_accents(value.lower()).replace("'", "''")
-    return (f"LOWER(REGEXP_REPLACE(NORMALIZE({column}, NFD), r'\\pM', '')) "
-            f"LIKE '%{clean}%'")
+    val_upper = strip_accents(value.upper()).strip()
+    
+    terms = [clean]
+    for k, aliases in ENTITY_SYNONYMS.items():
+        if k in val_upper or val_upper in k:
+            for alias in aliases:
+                c_alias = strip_accents(alias.lower()).replace("'", "''")
+                if c_alias not in terms:
+                    terms.append(c_alias)
+                    
+    if len(terms) == 1:
+        return (f"LOWER(REGEXP_REPLACE(NORMALIZE({column}, NFD), r'\\pM', '')) "
+                f"LIKE '%{terms[0]}%'")
+    
+    or_clauses = [
+        f"LOWER(REGEXP_REPLACE(NORMALIZE({column}, NFD), r'\\pM', '')) LIKE '%{t}%'"
+        for t in terms
+    ]
+    return f"({' OR '.join(or_clauses)})"
 
 def query(sql: str, max_rows: int = 50, timeout_sec: float = 30) -> list[dict]:
     """Run a BigQuery SQL query and return results as list of dicts."""

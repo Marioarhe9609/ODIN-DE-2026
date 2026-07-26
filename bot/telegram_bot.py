@@ -585,14 +585,6 @@ async def handle_chart_json(request):
 def main():
     logger.info("Starting Odin Telegram Bot Unified Server...")
 
-    # Re-create/fix document views on startup
-    try:
-        from scripts.fix_archivos_views import run as run_fix_views
-        logger.info("Verifying and repairing BigQuery document views...")
-        run_fix_views()
-    except Exception as ex:
-        logger.error(f"Failed to auto-repair BigQuery document views: {ex}", exc_info=True)
-
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("reset", reset_command))
@@ -795,13 +787,13 @@ def main():
         await app.start()
         if webhook_url:
             logger.info("Setting up Telegram webhook...")
-            await app.bot.delete_webhook(drop_pending_updates=True)
+            await app.bot.delete_webhook(drop_pending_updates=False)
             await app.bot.set_webhook(url=webhook_url)
             logger.info("Telegram webhook set successfully.")
         else:
             logger.info("Starting Telegram polling loop...")
-            await app.bot.delete_webhook(drop_pending_updates=True)
-            await app.updater.start_polling(drop_pending_updates=True)
+            await app.bot.delete_webhook(drop_pending_updates=False)
+            await app.updater.start_polling(drop_pending_updates=False)
             logger.info("Telegram polling loop started successfully.")
 
     async def on_cleanup(web_app):

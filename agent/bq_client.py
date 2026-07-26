@@ -40,8 +40,26 @@ generated_excels_var = contextvars.ContextVar("generated_excels_var", default=No
 PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
 DATASET = os.getenv("BQ_DATASET", "secop")
 
+def _make_no_keepalive_session(credentials):
+    """Build an AuthorizedSession that forces Connection: close on every request,
+    preventing stale keep-alive TLS socket errors on Cloud Run."""
+    session = AuthorizedSession(credentials)
+    session.headers.update({"Connection": "close"})
+    # Also disable urllib3's connection pool reuse
+    adapter = session.get_adapter("https://")
+    if hasattr(adapter, "max_retries"):
+        import urllib3
+        adapter.max_retries = urllib3.util.retry.Retry(
+            total=1,
+            connect=1,
+            read=1,
+            raise_on_status=False
+        )
+    return session
+
+
 def get_client():
-    """Return resilient BigQuery client with local token fallback."""
+    """Return resilient BigQuery client with no-keep-alive HTTP session."""
     try:
         import subprocess
         from google.oauth2.credentials import Credentials
@@ -49,10 +67,19 @@ def get_client():
         token = subprocess.run(cmd, capture_output=True, text=True, shell=True).stdout.strip()
         if token and len(token) > 20:
             credentials = Credentials(token)
-            return bigquery.Client(project=PROJECT, credentials=credentials)
+            http = _make_no_keepalive_session(credentials)
+            return bigquery.Client(project=PROJECT, credentials=credentials, _http=http)
     except Exception:
         pass
-        
+
+    # On Cloud Run: use Workload Identity with Connection: close session
+    try:
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        http = _make_no_keepalive_session(credentials)
+        return bigquery.Client(project=PROJECT, credentials=credentials, _http=http)
+    except Exception:
+        pass
+
     return bigquery.Client(project=PROJECT)
 
 client = get_client()

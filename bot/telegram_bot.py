@@ -45,40 +45,44 @@ runner = Runner(agent=odin_agent, app_name="odin_bot", session_service=session_s
 
 async def get_agent_response(user_id: str, message: str) -> str:
     """Send a message to the ADK agent and return the response."""
-    session = await session_service.get_session(
-        app_name="odin_bot", user_id=user_id, session_id=user_id
-    )
-    if not session:
-        session = await session_service.create_session(
+    try:
+        session = await session_service.get_session(
             app_name="odin_bot", user_id=user_id, session_id=user_id
         )
-    
-    user_content = genai_types.Content(
-        role="user",
-        parts=[genai_types.Part.from_text(text=message)]
-    )
-    
-    final_response = ""
-    async for event in runner.run_async(
-        user_id=user_id,
-        session_id=user_id,
-        new_message=user_content
-    ):
-        logger.info(f"Event received: {type(event).__name__}")
-        if event.is_final_response():
-            if event.content and event.content.parts:
-                logger.info(f"Final response parts: {len(event.content.parts)}")
-                for part in event.content.parts:
-                    if part.text:
-                        final_response += part.text
-                    else:
-                        logger.warning(f"Part has no text. Keys: {dir(part)}")
-            else:
-                logger.warning("Final response event received but content or parts is None")
+        if not session:
+            session = await session_service.create_session(
+                app_name="odin_bot", user_id=user_id, session_id=user_id
+            )
+        
+        user_content = genai_types.Content(
+            role="user",
+            parts=[genai_types.Part.from_text(text=message)]
+        )
+        
+        final_response = ""
+        async for event in runner.run_async(
+            user_id=user_id,
+            session_id=user_id,
+            new_message=user_content
+        ):
+            logger.info(f"Event received: {type(event).__name__}")
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    logger.info(f"Final response parts: {len(event.content.parts)}")
+                    for part in event.content.parts:
+                        if part.text:
+                            final_response += part.text
+                        else:
+                            logger.warning(f"Part has no text. Keys: {dir(part)}")
+                else:
+                    logger.warning("Final response event received but content or parts is None")
+    except Exception as e:
+        logger.error(f"Error in get_agent_response: {e}", exc_info=True)
+        return f"⚠️ Ocurrió una desconexión temporal con los servidores de consulta: {str(e)}. Por favor intenta nuevamente enviando tu consulta."
     
     if not final_response:
         logger.error(f"Agent returned empty response for user {user_id}")
-    return final_response or "No pude procesar tu consulta. Intenta de nuevo."
+    return final_response or "No encontré hallazgos registrados con los filtros especificados. Intenta ampliar el rango de búsqueda."
 
 
 # ── PDF Generation (imported from module) ─────────────────────────────────
@@ -361,13 +365,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.error(f"Failed to create inline keyboard for graph {cid}: {ex_kb}")
 
         # Send text response
-        if len(display_text) > 4000:
-            for i in range(0, len(display_text), 4000):
-                is_last = (i + 4000 >= len(display_text))
-                markup = reply_markup if is_last else None
-                await update.message.reply_text(display_text[i:i+4000], reply_markup=markup)
-        else:
-            await update.message.reply_text(display_text, reply_markup=reply_markup)
+        try:
+            if len(display_text) > 4000:
+                for i in range(0, len(display_text), 4000):
+                    is_last = (i + 4000 >= len(display_text))
+                    markup = reply_markup if is_last else None
+                    try:
+                        await update.message.reply_text(display_text[i:i+4000], reply_markup=markup, parse_mode="Markdown")
+                    except Exception:
+                        await update.message.reply_text(display_text[i:i+4000], reply_markup=markup)
+            else:
+                try:
+                    await update.message.reply_text(display_text, reply_markup=reply_markup, parse_mode="Markdown")
+                except Exception:
+                    await update.message.reply_text(display_text, reply_markup=reply_markup)
+        except Exception as err_send:
+            logger.error(f"Error sending message to telegram: {err_send}", exc_info=True)
 
         # Auto-generate PDF (always if charts exist, or if user asked)
         has_data = len(response) > 200 or "$" in response or bool(chart_paths)

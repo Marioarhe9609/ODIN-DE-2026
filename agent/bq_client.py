@@ -33,6 +33,7 @@ except Exception:
 from google.cloud import bigquery
 import unicodedata
 import contextvars
+import re
 
 # Initialize context variable for tracking generated excel files in the current async task context
 generated_excels_var = contextvars.ContextVar("generated_excels_var", default=None)

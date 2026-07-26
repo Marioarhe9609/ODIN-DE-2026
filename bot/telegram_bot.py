@@ -248,6 +248,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if send_pdf:
         for word in ["en pdf", "como pdf", "formato pdf", "pdf",
                       "genera un informe de", "genera informe de",
+                      "genera un informe de", "genera informe de",
                       "genera el informe de", "dame un informe de",
                       "dame el informe de", "dame informe de",
                       "genera un informe", "genera informe",
@@ -275,31 +276,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = generated_excels_var.set(excels_list)
 
     try:
-        import time
-        now = time.time()
-        if now - MEMORY_CACHE.get("last_fetched", 0) > 60:
-            from agent.bq_client import PROJECT, DATASET, get_client
-            client = get_client()
-            try:
-                mem_rows = client.query(f"SELECT regla FROM `{PROJECT}.{DATASET}.memoria_odin`").result()
-                MEMORY_CACHE["rules"] = [r.regla for r in mem_rows]
-                MEMORY_CACHE["last_fetched"] = now
-            except Exception as eq:
-                logger.warning(f"Memoria odin no existe aun o fallo: {eq}")
-                
-        if MEMORY_CACHE.get("rules"):
-            reglas_str = "\n- ".join(MEMORY_CACHE["rules"])
-            agent_msg += f"\n\n[INSTRUCCIÓN INTERNA (MEMORIA DE LARGO PLAZO):\nTen en cuenta las siguientes reglas de negocio que el usuario te ha enseñado previamente:\n- {reglas_str}\n\nAplica estrictamente estas reglas al responder o generar consultas.]"
-    except Exception as e:
-        logger.warning(f"Error fetching memory rules: {e}")
+        # 1. Fetch memory rules
+        try:
+            import time
+            now = time.time()
+            if now - MEMORY_CACHE.get("last_fetched", 0) > 60:
+                from agent.bq_client import PROJECT, DATASET, get_client
+                client = get_client()
+                try:
+                    mem_rows = client.query(f"SELECT regla FROM `{PROJECT}.{DATASET}.memoria_odin`").result()
+                    MEMORY_CACHE["rules"] = [r.regla for r in mem_rows]
+                    MEMORY_CACHE["last_fetched"] = now
+                except Exception as eq:
+                    logger.warning(f"Memoria odin no existe aun o fallo: {eq}")
+                    
+            if MEMORY_CACHE.get("rules"):
+                reglas_str = "\n- ".join(MEMORY_CACHE["rules"])
+                agent_msg += f"\n\n[INSTRUCCIÓN INTERNA (MEMORIA DE LARGO PLAZO):\nTen en cuenta las siguientes reglas de negocio que el usuario te ha enseñado previamente:\n- {reglas_str}\n\nAplica strictly estas reglas al responder o generar consultas.]"
+        except Exception as e:
+            logger.warning(f"Error fetching memory rules: {e}")
 
+        # 2. Call agent response
         try:
             response = await get_agent_response(user_id, agent_msg)
         except Exception as ex_gen:
-            logger.error(f"Error in handle_message: {ex_gen}", exc_info=True)
+            logger.error(f"Error in handle_message get_agent_response: {ex_gen}", exc_info=True)
             response = "⚠️ Ocurrió un inconveniente técnico al procesar tu consulta. Por favor intenta nuevamente."
 
-    # Extract chart markers from response
+        # 3. Extract chart markers
         chart_markers = re.findall(r'\[CHART:(\w+)\]', response)
         chart_paths = {}
         if chart_markers:
@@ -309,12 +313,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if os.path.exists(cpath):
                     chart_paths[cid] = cpath
 
-        # Clean markers from text for Telegram display
+        # 4. Clean markers from display text
         display_text = re.sub(r'\[CHART:\w+\][^\n]*', '', response).strip()
         display_text = re.sub(r'\[EXCEL:[^\]]+\][^\n]*', '', display_text).strip()
         display_text = re.sub(r'\n{3,}', '\n\n', display_text)
 
-        # ── INTERACTIVE WEBVIEW BUTTON FORMATION ──────────────────────────────
+        # 5. Interactive Webview Button
         reply_markup = None
         for cid in chart_markers:
             from agent.tools_graficos import CHART_DIR
@@ -325,7 +329,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         cy_data = jf.read().replace("\n", "").replace("\r", "")
                     
                     GRAPH_CACHE[cid] = cy_data
-                    
                     encoded_bytes = base64.b64encode(cy_data.encode("utf-8"))
                     encoded_b64 = encoded_bytes.decode("ascii")
                     
@@ -345,30 +348,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         base_url = base_url[:-1]
                         
                     title_enc = urllib.parse.quote(title)
-                    
-                    # Telegram WebApp supports URLs up to ~8KB.
-                    # Always prefer base64 inline (Cloud Run is stateless, cid breaks across instances).
-                    # Fall back to cid only if URL exceeds Telegram limit.
                     url_b64 = f"{base_url}/visualizador?g={encoded_b64}&t={title_enc}"
                     if len(url_b64) <= 8000:
                         url = url_b64
                     else:
-                        # Very large graph — must use cid endpoint (works if same instance serves)
                         url = f"{base_url}/visualizador?cid={cid}&t={title_enc}"
                     
-                    # Create WebApp button
                     btn = InlineKeyboardButton(text="🔍 Ver Red Interactiva", web_app=WebAppInfo(url=url))
                     reply_markup = InlineKeyboardMarkup([[btn]])
                     
-                    # Remove chart marker so we use WebView instead of static image text
                     display_text = display_text.replace(f"[CHART:{cid}]", "")
                     if cid in chart_paths:
                         del chart_paths[cid]
-                    break  # Keep one interactive graph per bubble
+                    break
                 except Exception as ex_kb:
                     logger.error(f"Failed to create inline keyboard for graph {cid}: {ex_kb}")
 
-        # Send text response
+        # 6. Send text response
         try:
             target_msg = update.effective_message or update.message
             chat_id = update.effective_chat.id if update.effective_chat else None
@@ -392,7 +388,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as err_send:
             logger.error(f"Error sending message to telegram: {err_send}", exc_info=True)
 
-        # Auto-generate PDF (always if charts exist, or if user asked)
+        # 7. Auto-generate PDF
         has_data = len(response) > 200 or "$" in response or bool(chart_paths)
         is_just_question = response.strip().endswith("?") and len(response) < 300 and not has_data
         should_pdf = send_pdf or (bool(chart_paths) and not is_just_question)
@@ -427,7 +423,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"PDF error: {e}", exc_info=True)
 
-        # Send Excel file(s) if user requested
+        # 8. Send Excel file(s)
         if send_excel and excels_list:
             try:
                 import pandas as pd
@@ -454,7 +450,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 filename=merged_filename,
                                 caption="📊 Datos Exportados (Múltiples Tablas en un solo Excel)"
                             )
-                        # Add to list so it gets deleted in finally block
                         excels_list.append(merged_filepath)
                 elif len(valid_excels) == 1:
                     filepath = valid_excels[0]
@@ -474,7 +469,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         logger.info(f"Done ({len(response)} chars)")
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
+        logger.error(f"Error in handle_message outer block: {e}", exc_info=True)
         await update.message.reply_text(
             "⚠️ Hubo un error procesando tu consulta. Intenta de nuevo en unos segundos."
         )
@@ -486,6 +481,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     os.remove(filepath)
             except Exception as e:
                 logger.warning(f"Failed to delete temp Excel file {filepath}: {e}")
+
 
 
 async def doc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

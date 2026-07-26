@@ -7,9 +7,7 @@ import sys
 # Add parent to path first to allow absolute imports of agent module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ─── CRITICAL: Patch AuthorizedSession BEFORE any Google Cloud import ────────
-# Cloud Run uses keep-alive sockets that expire and cause SSL EOF errors.
-# Forcing Connection: close on every google-auth request eliminates 2-3 min hangs.
+# ─── CRITICAL: Patch google.genai BaseApiClient, httpx, AuthorizedSession & urllib3 BEFORE GCP imports ────────
 from google.auth.transport.requests import AuthorizedSession as _AS
 _orig_as_init = _AS.__init__
 def _patch_as_init(self, *args, **kwargs):
@@ -17,7 +15,28 @@ def _patch_as_init(self, *args, **kwargs):
     self.headers.update({"Connection": "close"})
 _AS.__init__ = _patch_as_init
 
-# Also patch urllib3 at the socket level to prevent stale keep-alive TLS sessions
+try:
+    import google.genai._api_client as _genai_api
+    _orig_async_req_once = _genai_api.BaseApiClient._async_request_once
+    async def _patched_async_req_once(self, http_request, *args, **kwargs):
+        if hasattr(http_request, "headers") and http_request.headers is not None:
+            http_request.headers["connection"] = "close"
+            http_request.headers["Connection"] = "close"
+        return await _orig_async_req_once(self, http_request, *args, **kwargs)
+    _genai_api.BaseApiClient._async_request_once = _patched_async_req_once
+except Exception:
+    pass
+
+try:
+    import httpx
+    _orig_httpx_async_init = httpx.AsyncClient.__init__
+    def _patched_httpx_async_init(self, *args, **kwargs):
+        kwargs["limits"] = httpx.Limits(max_connections=100, max_keepalive_connections=0, keepalive_expiry=0)
+        _orig_httpx_async_init(self, *args, **kwargs)
+    httpx.AsyncClient.__init__ = _patched_httpx_async_init
+except Exception:
+    pass
+
 try:
     import urllib3 as _urllib3
     _orig_urlopen = _urllib3.HTTPConnectionPool.urlopen

@@ -7,7 +7,21 @@ import sys
 # Add parent to path first to allow absolute imports of agent module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ─── CRITICAL: Patch google.auth Request, AuthorizedSession, httpx & urllib3 BEFORE GCP imports ────────
+# ─── CRITICAL: Force fresh sockets on urllib3, requests, httpx & google.auth BEFORE GCP imports ────────
+try:
+    import urllib3.connectionpool
+    _orig_get_conn = urllib3.connectionpool.HTTPConnectionPool._get_conn
+    def _patched_get_conn(self, timeout=None):
+        conn = _orig_get_conn(self, timeout=timeout)
+        if hasattr(conn, 'sock') and conn.sock:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return conn
+    urllib3.connectionpool.HTTPConnectionPool._get_conn = _patched_get_conn
+except Exception:
+    pass
 try:
     import google.auth.transport.requests
     import requests

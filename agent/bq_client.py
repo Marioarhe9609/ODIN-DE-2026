@@ -14,8 +14,20 @@ def _patched_auth_init(self, *args, **kwargs):
     self.headers.update({"Connection": "close"})
 AuthorizedSession.__init__ = _patched_auth_init
 
-# 2) Patch urllib3 HTTPConnectionPool to disable keep-alive at the socket level
+# 2) Patch urllib3 HTTPConnectionPool to disable keep-alive & force fresh sockets
 try:
+    import urllib3.connectionpool
+    _orig_get_conn = urllib3.connectionpool.HTTPConnectionPool._get_conn
+    def _patched_get_conn(self, timeout=None):
+        conn = _orig_get_conn(self, timeout=timeout)
+        if hasattr(conn, 'sock') and conn.sock:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return conn
+    urllib3.connectionpool.HTTPConnectionPool._get_conn = _patched_get_conn
+
     import urllib3
     _orig_urlopen = urllib3.HTTPConnectionPool.urlopen
     def _patched_urlopen(self, method, url, *args, **kwargs):

@@ -164,6 +164,7 @@ Cuando usar cada tipo:
 - generar_grafico_pastel: Distribucion de categorias (modalidades, departamentos, sectores)
 - generar_grafico_lineas: Tendencias temporales (evolucion mensual, comparar anios)
 - generar_grafico_medidor: Score o nivel de riesgo (scoring anticorrupcion, indice)
+- generar_red_consorcios / generar_grafo_supervisores: Mapear redes de relaciones, colusion, consorcios y conexiones entre proveedores, entidades y supervisores. Devuelve un mapa interactivo visual.
 
 Ejemplo de uso:
 1. Consultas ejecucion presupuestal -> obtienes Asignado=100M, Pagado=60M, Pendiente=40M

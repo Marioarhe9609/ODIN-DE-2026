@@ -412,6 +412,18 @@ def get_chart_path(chart_id: str) -> str:
     return os.path.join(CHART_DIR, f"chart_{chart_id}.png")
 
 
+def generar_grafo_supervisores(titulo: str, central_node: str, nodes: dict, edges: list) -> str:
+    """Genera un grafo de red interactivo que conecta Entidades, Proveedores y Supervisores recurrentes.
+    Permite visualizar relaciones cruzadas de supervisión y posibles patrones de encubrimiento.
+    Args:
+        titulo: Título descriptivo del mapa de red de supervisión.
+        central_node: Nombre del supervisor o entidad principal (opcional).
+        nodes: Diccionario con la información de los nodos {nombre: {"val": monto, "contr": num_contratos}}.
+        edges: Lista de tuplas (origen, destino, num_procesos).
+    """
+    return generar_red_consorcios(titulo=titulo, central_node=central_node, nodes=nodes, edges=edges)
+
+
 TOOLS = [
     generar_grafico_barras,
     generar_grafico_dona,
@@ -419,4 +431,5 @@ TOOLS = [
     generar_grafico_lineas,
     generar_grafico_medidor,
     generar_red_consorcios,
+    generar_grafo_supervisores,
 ]

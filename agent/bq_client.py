@@ -3,44 +3,7 @@ import os
 import google.auth
 from google.auth.transport.requests import AuthorizedSession
 
-# ─── CRITICAL: Patch AuthorizedSession AND urllib3 to disable keep-alive ─────
-# Cloud Run terminates idle TLS sockets, causing SSL EOF errors + 3-min hangs.
-# We force Connection: close at both layers so every request uses a fresh socket.
 
-# 1) Patch AuthorizedSession (google-auth layer)
-_orig_auth_init = AuthorizedSession.__init__
-def _patched_auth_init(self, *args, **kwargs):
-    _orig_auth_init(self, *args, **kwargs)
-    self.headers.update({"Connection": "close"})
-AuthorizedSession.__init__ = _patched_auth_init
-
-# 2) Patch urllib3 HTTPConnectionPool to disable keep-alive & force fresh sockets
-try:
-    import urllib3.connectionpool
-    _orig_get_conn = urllib3.connectionpool.HTTPConnectionPool._get_conn
-    def _patched_get_conn(self, timeout=None):
-        conn = _orig_get_conn(self, timeout=timeout)
-        if hasattr(conn, 'sock') and conn.sock:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return conn
-    urllib3.connectionpool.HTTPConnectionPool._get_conn = _patched_get_conn
-
-    import urllib3
-    _orig_urlopen = urllib3.HTTPConnectionPool.urlopen
-    def _patched_urlopen(self, method, url, *args, **kwargs):
-        headers = kwargs.get("headers") or {}
-        if isinstance(headers, dict):
-            headers["Connection"] = "close"
-            kwargs["headers"] = headers
-        return _orig_urlopen(self, method, url, *args, **kwargs)
-    urllib3.HTTPConnectionPool.urlopen = _patched_urlopen
-    urllib3.HTTPSConnectionPool.urlopen = _patched_urlopen
-except Exception:
-    pass
-# ─────────────────────────────────────────────────────────────────────────────
 
 from google.cloud import bigquery
 import unicodedata

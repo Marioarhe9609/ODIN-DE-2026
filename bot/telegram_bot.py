@@ -78,7 +78,7 @@ async def get_agent_response(user_id: str, message: str) -> str:
                     logger.warning("Final response event received but content or parts is None")
     except Exception as e:
         logger.error(f"Error in get_agent_response: {e}", exc_info=True)
-        return f"⚠️ Ocurrió una desconexión temporal con los servidores de consulta: {str(e)}. Por favor intenta nuevamente enviando tu consulta."
+        return "⚠️ Ocurrió un inconveniente técnico temporal al consultar los servidores de información. Por favor intenta nuevamente enviar tu pregunta."
     
     if not final_response:
         logger.error(f"Agent returned empty response for user {user_id}")

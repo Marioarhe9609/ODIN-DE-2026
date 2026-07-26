@@ -579,15 +579,31 @@ def listar_documentos_contrato(id_contrato: str = "", entidad: str = "", top: in
         entidad: Nombre (parcial) de la entidad.
         top: Numero maximo de resultados.
     """
-    where = "1=1"
+    where_clauses = ["1=1"]
     if id_contrato:
-        where += f" AND n_mero_de_contrato = '{id_contrato}'"
+        where_clauses.append(f"(e.id_contrato = '{id_contrato}' OR c.id_contrato = '{id_contrato}')")
     if entidad:
-        where += f" AND {safe_like('entidad', entidad)}"
+        where_clauses.append(f"({safe_like('c.nombre_entidad', entidad)} OR {safe_like('c.nit_entidad', entidad)})")
     if not id_contrato and not entidad:
         return "Debes indicar un id_contrato o entidad."
-    rows = query_view("archivos_secop", where=where,
-                       order="fecha_carga DESC", limit=top)
+        
+    where_sql = " AND ".join(where_clauses)
+    sql = f"""
+    SELECT 
+      e.id_contrato,
+      c.nombre_entidad,
+      e.nombre_archivo,
+      e.url_archivo,
+      c.urlproceso AS url_proceso
+    FROM `{PROJECT}.{DATASET}.documentos_embeddings` e
+    JOIN `{PROJECT}.{DATASET}.contratos_electronicos` c
+      ON e.id_contrato = c.id_contrato OR e.id_contrato = c.proceso_de_compra
+    WHERE {where_sql}
+    LIMIT {top}
+    """
+    rows = query(sql, max_rows=top)
+    if not rows:
+        return "No se encontraron documentos anexos cargados para este contrato o entidad."
     return f"Documentos del contrato:\n{format_table(rows)}"
 
 

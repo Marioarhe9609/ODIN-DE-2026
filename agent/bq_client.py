@@ -7,7 +7,7 @@ import contextvars
 # Initialize context variable for tracking generated excel files in the current async task context
 generated_excels_var = contextvars.ContextVar("generated_excels_var", default=None)
 
-PROJECT = os.getenv("GCP_PROJECT_ID", "odin-v2-495523")
+PROJECT = os.getenv("GCP_PROJECT_ID", "proy-anla-poc")
 DATASET = os.getenv("BQ_DATASET", "secop")
 client = bigquery.Client(project=PROJECT)
 
@@ -58,26 +58,30 @@ def query_view(view_name: str, where: str = "", order: str = "", limit: int = 20
     return query(sql, max_rows=limit, timeout_sec=timeout_sec)
 
 def format_table(rows: list[dict], max_cols: int = 15) -> str:
-    """Format query results as a readable text table."""
+    """Format query results as a readable text table with clickable markdown links for URLs."""
     if not rows:
         return "Sin resultados."
     keys = list(rows[0].keys())[:max_cols]
     def fmt(k, v):
         s = str(v) if v is not None else "-"
-        if k.lower() in ('url', 'urlproceso'):
+        if k.lower() in ('url', 'urlproceso', 'url_archivo', 'url_proceso', 'archivo_anexo', 'url_descarga'):
             return s
-        return s[:80] + "..." if len(s) > 80 else s
+        return s[:120] + "..." if len(s) > 120 else s
         
     lines = []
     for i, r in enumerate(rows, 1):
         lines.append(f"📋 **Registro #{i}**")
         for k in keys:
             val = fmt(k, r.get(k))
-            # Format URLs specifically if needed
-            if k.lower() in ('url', 'urlproceso') and str(val).startswith('http'):
-                lines.append(f"  • **{k.replace('_', ' ').title()}:** {val}")
+            key_clean = k.replace('_', ' ').title()
+            
+            # Format URLs as clickable markdown links
+            if k.lower() in ('url_archivo', 'url_descarga') and str(val).startswith('http'):
+                lines.append(f"  • 📄 **{key_clean}:** [{r.get('nombre_archivo', 'Ver PDF Anexo Original')}]({val})")
+            elif k.lower() in ('url', 'urlproceso', 'url_proceso') and str(val).startswith('http'):
+                lines.append(f"  • 🔗 **{key_clean}:** [Ver Proceso en SECOP II]({val})")
             else:
-                lines.append(f"  • **{k.replace('_', ' ').title()}:** {val}")
+                lines.append(f"  • **{key_clean}:** {val}")
         lines.append("")  # Empty line separator
         
     table_text = "\n".join(lines).strip()

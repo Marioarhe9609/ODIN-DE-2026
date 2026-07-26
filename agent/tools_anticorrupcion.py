@@ -955,6 +955,63 @@ def detectar_colusion_representante(proveedor: str = "", entidad: str = "", top:
     return result
 
 
+def consultar_auditoria_entregables(entidad: str = "", estado: str = "", id_contrato: str = "", top: int = 20) -> str:
+    """Consulta los hallazgos de auditoría documental generados por IA (Gemini Flash).
+    Muestra entregables prometidos vs recibidos, estado de cumplimiento (INCUMPLIDO, PARCIAL, CUMPLIDO) y alertas.
+    Incluye el enlace directo en Markdown al PDF anexo original cargado en SECOP II.
+    Args:
+        entidad: Nombre (parcial) o NIT de la entidad.
+        estado: Estado del entregable ('INCUMPLIDO', 'PARCIAL', 'CUMPLIDO').
+        id_contrato: ID específico del contrato (ej: 'CO1.BDOS.9242655').
+        top: Número máximo de resultados.
+    """
+    where_clauses = ["1=1"]
+    if entidad:
+        where_clauses.append(f"({safe_like('c.nombre_entidad', entidad)} OR c.nit_entidad = '{entidad}')")
+    if estado:
+        where_clauses.append(f"UPPER(a.estado) = '{estado.upper()}'")
+    if id_contrato:
+        where_clauses.append(f"a.id_contrato = '{id_contrato}'")
+        
+    where_sql = " AND ".join(where_clauses)
+    
+    sql = f"""
+    SELECT 
+      a.id_contrato,
+      c.nombre_entidad,
+      c.proveedor_adjudicado,
+      c.valor_del_contrato,
+      a.entregable_prometido,
+      a.entregable_recibido,
+      a.estado AS estado_cumplimiento,
+      a.alerta_aceptado_sin_implementar,
+      a.evidencia_encontrada AS nombre_archivo,
+      e.url_archivo AS url_archivo,
+      c.url_proceso AS url_proceso
+    FROM `{PROJECT}.{DATASET}.contratos_auditoria_entregables` a
+    LEFT JOIN `{PROJECT}.{DATASET}.contratos_electronicos` c
+      ON a.id_contrato = c.id_contrato OR a.id_contrato = c.proceso_de_compra
+    LEFT JOIN `{PROJECT}.{DATASET}.documentos_embeddings` e
+      ON a.id_contrato = e.id_contrato AND a.evidencia_encontrada = e.nombre_archivo
+    WHERE {where_sql}
+    ORDER BY c.valor_del_contrato DESC
+    LIMIT {top}
+    """
+    rows = query(sql, max_rows=top)
+    if not rows:
+        return "No se encontraron hallazgos de auditoría documental con los criterios especificados."
+        
+    result = f"=== AUDITORÍA DOCUMENTAL DE ENTREGABLES (AI GEMINI FLASH) ===\n"
+    if entidad:
+        result += f"Filtro Entidad: {entidad}\n"
+    if estado:
+        result += f"Filtro Estado: {estado}\n\n"
+        
+    result += format_table(rows) + "\n\n"
+    result += f"📊 FUENTE DE AUDITORÍA: Análisis multimodal en tiempo real sobre los anexos de SECOP II en la base `{PROJECT}.{DATASET}`."
+    return result
+
+
 # Registry of all tools for ADK
 TOOLS = [
     buscar_proveedor_monopolista,
@@ -974,6 +1031,7 @@ TOOLS = [
     diagnostico_integral,
     listar_documentos_contrato,
     detectar_colusion_representante,
+    consultar_auditoria_entregables,
 ]
 
 

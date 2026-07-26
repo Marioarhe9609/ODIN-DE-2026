@@ -496,6 +496,74 @@ def auditar_modificaciones_paa(entidad: str = "", top: int = 15) -> str:
     return result
 
 
+def crecimiento_gasto_interanual(entidad: str = "", anio_base: int = 2024, anio_comparado: int = 2025, top: int = 20) -> str:
+    """Calcula la variacion y crecimiento interanual del gasto contractual entre dos años para entidades públicas.
+    Indica el incremento absoluto en pesos COP y el porcentaje de crecimiento (%).
+    Args:
+        entidad: Nombre (parcial) o NIT de la entidad. Si vacio, muestra las entidades con mayor incremento de gasto.
+        anio_base: Año base de comparación (default: 2024).
+        anio_comparado: Año contra el cual se compara (default: 2025).
+        top: Numero maximo de resultados a mostrar.
+    """
+    clean = entidad.strip()
+    where_entidad = ""
+    if clean:
+        where_entidad = f"AND ({safe_like('nombre_entidad', clean)} OR nit_entidad = '{clean}')"
+        
+    sql = f"""
+    WITH gasto_anual AS (
+      SELECT 
+        nombre_entidad,
+        nit_entidad,
+        EXTRACT(YEAR FROM fecha_de_firma) AS anio,
+        COUNT(DISTINCT id_contrato) AS total_contratos,
+        SUM(valor_del_contrato) AS gasto_total
+      FROM `{PROJECT}.{DATASET}.contratos_electronicos`
+      WHERE fecha_de_firma IS NOT NULL AND valor_del_contrato > 0 {where_entidad}
+      GROUP BY nombre_entidad, nit_entidad, anio
+    )
+    SELECT 
+      g1.nombre_entidad,
+      g1.nit_entidad,
+      g1.gasto_total AS gasto_base,
+      g2.gasto_total AS gasto_comparado,
+      (g2.gasto_total - g1.gasto_total) AS incremento_absoluto_cop,
+      ROUND(((g2.gasto_total - g1.gasto_total) * 100.0 / NULLIF(g1.gasto_total, 0)), 2) AS pct_crecimiento_interanual
+    FROM gasto_anual g1
+    JOIN gasto_anual g2 
+      ON g1.nit_entidad = g2.nit_entidad AND g1.anio = {anio_base} AND g2.anio = {anio_comparado}
+    WHERE g1.gasto_total > 100000000 -- Entidades con gasto base significativo (>100M)
+    ORDER BY incremento_absoluto_cop DESC
+    LIMIT {top}
+    """
+    rows = query(sql, max_rows=top)
+    if not rows:
+        return f"No se registraron datos de variación de gasto interanual entre {anio_base} y {anio_comparado}."
+        
+    result = f"=== CRECIMIENTO INTERANUAL DEL GASTO CONTRACTUAL ({anio_base} vs {anio_comparado}) ===\n"
+    if clean:
+        result += f"Filtro Entidad: {clean}\n\n"
+        
+    formatted = []
+    for r in rows:
+        inc = r.get('incremento_absoluto_cop', 0) or 0
+        pct = r.get('pct_crecimiento_interanual', 0) or 0
+        status = "🔴 Crecimiento Significativo" if pct > 50 else "🟢 Normal"
+        formatted.append({
+            'entidad': r['nombre_entidad'][:35] if r.get('nombre_entidad') else '-',
+            'nit': r.get('nit_entidad', '-'),
+            f'gasto_{anio_base}': f"${r.get('gasto_base', 0):,.0f}",
+            f'gasto_{anio_comparado}': f"${r.get('gasto_comparado', 0):,.0f}",
+            'incremento_cop': f"+${inc:,.0f}" if inc > 0 else f"-${abs(inc):,.0f}",
+            'crecimiento_pct': f"{pct}%",
+            'tendencia': status
+        })
+        
+    result += format_table(formatted) + "\n\n"
+    result += f"📊 METODOLOGÍA: Variación calculada a partir de los contratos firmados en SECOP II en los años {anio_base} y {anio_comparado} en el dataset `{PROJECT}.{DATASET}`."
+    return result
+
+
 TOOLS = [
     tabla_ejecucion,
     gasto_por_modalidad,
@@ -506,4 +574,5 @@ TOOLS = [
     red_flujo_pagos,
     analizar_presupuesto_paa,
     auditar_modificaciones_paa,
+    crecimiento_gasto_interanual,
 ]

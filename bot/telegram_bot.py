@@ -292,21 +292,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Error fetching memory rules: {e}")
 
-    async def keep_typing():
-        try:
-            while True:
-                await update.message.chat.send_action("typing")
-                await asyncio.sleep(4)
-        except Exception:
-            pass
-
-    typing_task = asyncio.create_task(keep_typing())
     try:
         response = await get_agent_response(user_id, agent_msg)
-    finally:
-        typing_task.cancel()
+    except Exception as ex_gen:
+        logger.error(f"Error in handle_message: {ex_gen}", exc_info=True)
+        response = "⚠️ Ocurrió un inconveniente técnico al procesar tu consulta. Por favor intenta nuevamente."
 
-        # Extract chart markers from response
+    # Extract chart markers from response
         chart_markers = re.findall(r'\[CHART:(\w+)\]', response)
         chart_paths = {}
         if chart_markers:

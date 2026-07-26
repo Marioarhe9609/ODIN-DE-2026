@@ -7,13 +7,29 @@ import sys
 # Add parent to path first to allow absolute imports of agent module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# ─── CRITICAL: Patch google.genai BaseApiClient, httpx, AuthorizedSession & urllib3 BEFORE GCP imports ────────
-from google.auth.transport.requests import AuthorizedSession as _AS
-_orig_as_init = _AS.__init__
-def _patch_as_init(self, *args, **kwargs):
-    _orig_as_init(self, *args, **kwargs)
-    self.headers.update({"Connection": "close"})
-_AS.__init__ = _patch_as_init
+# ─── CRITICAL: Patch google.auth Request, AuthorizedSession, httpx & urllib3 BEFORE GCP imports ────────
+try:
+    import google.auth.transport.requests
+    import requests
+    _orig_req_init = google.auth.transport.requests.Request.__init__
+    def _patched_req_init(self, session=None, *args, **kwargs):
+        if session is None:
+            session = requests.Session()
+        session.headers.update({"Connection": "close"})
+        _orig_req_init(self, session=session, *args, **kwargs)
+    google.auth.transport.requests.Request.__init__ = _patched_req_init
+except Exception:
+    pass
+
+try:
+    from google.auth.transport.requests import AuthorizedSession as _AS
+    _orig_as_init = _AS.__init__
+    def _patch_as_init(self, *args, **kwargs):
+        _orig_as_init(self, *args, **kwargs)
+        self.headers.update({"Connection": "close"})
+    _AS.__init__ = _patch_as_init
+except Exception:
+    pass
 
 try:
     import google.genai._api_client as _genai_api

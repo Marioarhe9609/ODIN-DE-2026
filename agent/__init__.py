@@ -338,8 +338,8 @@ REGLAS DE BUSQUEDA:
 
 odin_agent = Agent(
     name="odin",
-    model="gemini-2.5-pro",
-    description="Agente experto en contratacion publica colombiana con acceso a SECOP II.",
+    model="gemini-2.5-flash",
+    description="Agente ultra-rápido experto en auditoría documental y contratación pública colombiana con acceso a SECOP II.",
     instruction=SYSTEM_PROMPT,
     tools=ANTICORR_TOOLS + GASTO_TOOLS + MERCADO_TOOLS + CHART_TOOLS + TVEC_TOOLS + PRED_TOOLS,
 )

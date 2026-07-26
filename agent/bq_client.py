@@ -68,9 +68,8 @@ def strip_accents(text: str) -> str:
 
 
 def safe_like(column: str, value: str) -> str:
-    """Build a LIKE clause that works regardless of accents/tildes.
-    Uses BigQuery NORMALIZE + REGEXP_REPLACE to strip diacritics and automatically
-    expands acronyms/synonyms (e.g. Mindefensa -> Ministerio de Defensa Nacional)."""
+    """Build an ultra-fast LIKE clause that works regardless of accents/case and
+    automatically expands acronyms/synonyms (e.g. Mindefensa -> Ministerio de Defensa Nacional)."""
     clean = strip_accents(value.lower()).replace("'", "''")
     val_upper = strip_accents(value.upper()).strip()
     
@@ -83,11 +82,10 @@ def safe_like(column: str, value: str) -> str:
                     terms.append(c_alias)
                     
     if len(terms) == 1:
-        return (f"LOWER(REGEXP_REPLACE(NORMALIZE({column}, NFD), r'\\pM', '')) "
-                f"LIKE '%{terms[0]}%'")
+        return f"LOWER({column}) LIKE '%{terms[0]}%'"
     
     or_clauses = [
-        f"LOWER(REGEXP_REPLACE(NORMALIZE({column}, NFD), r'\\pM', '')) LIKE '%{t}%'"
+        f"LOWER({column}) LIKE '%{t}%'"
         for t in terms
     ]
     return f"({' OR '.join(or_clauses)})"

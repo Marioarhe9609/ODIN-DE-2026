@@ -292,8 +292,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Error fetching memory rules: {e}")
 
+    async def keep_typing():
+        try:
+            while True:
+                await update.message.chat.send_action("typing")
+                await asyncio.sleep(4)
+        except Exception:
+            pass
+
+    typing_task = asyncio.create_task(keep_typing())
     try:
         response = await get_agent_response(user_id, agent_msg)
+    finally:
+        typing_task.cancel()
 
         # Extract chart markers from response
         chart_markers = re.findall(r'\[CHART:(\w+)\]', response)

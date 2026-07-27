@@ -1053,9 +1053,9 @@ def consultar_detalle_modificaciones_contrato(id_contrato: str = "", proveedor: 
     if id_contrato:
         clean_id = id_contrato.strip().lower()
         where_clauses.append(f"LOWER(id_contrato) LIKE '%{clean_id}%'")
-    if proveedor:
+    elif proveedor:
         clean_prov = proveedor.strip().lower()
-        where_clauses.append(f"LOWER(id_contrato) IN (SELECT id_contrato FROM `{PROJECT}.{DATASET}.contratos_electronicos` WHERE {safe_like('proveedor_adjudicado', clean_prov)})")
+        where_clauses.append(f"LOWER(id_contrato) IN (SELECT LOWER(id_contrato) FROM `{PROJECT}.{DATASET}.contratos_electronicos` WHERE {safe_like('proveedor_adjudicado', clean_prov)})")
         
     where_sql = " AND ".join(where_clauses)
     sql = f"""

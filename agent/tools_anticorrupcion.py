@@ -1037,7 +1037,59 @@ def consultar_auditoria_entregables(entidad: str = "", estado: str = "", id_cont
         
     result += format_table(rows) + "\n\n"
     result += f"📊 FUENTE DE AUDITORÍA: Análisis multimodal en tiempo real sobre los anexos de SECOP II en la base `{PROJECT}.{DATASET}`."
-    return result
+def consultar_detalle_modificaciones_contrato(id_contrato: str = "", proveedor: str = "", top: int = 30) -> str:
+    """Consulta el desglose detallado de cada modificacion, adicion u otrosi registrado en SECOP II para un contrato especifico o proveedor,
+    incluyendo fechas de aprobacion, memorandos de soporte, dias extendidos, valores modificados y justificacion legal.
+    USA ESTA HERRAMIENTA OBLIGATORIAMENTE cuando el usuario pida ver el detalle o descripcion de las adiciones / modificaciones de un contrato.
+    Args:
+        id_contrato: ID o codigo del contrato (ej: 'CO1.PCCNTR.5653378').
+        proveedor: Nombre o NIT del proveedor.
+        top: Numero maximo de registros (default: 30).
+    """
+    if not id_contrato and not proveedor:
+        return "Debes proporcionar un id_contrato o proveedor para consultar el detalle de modificaciones."
+    
+    where_clauses = []
+    if id_contrato:
+        clean_id = id_contrato.strip().lower()
+        where_clauses.append(f"LOWER(id_contrato) LIKE '%{clean_id}%'")
+    if proveedor:
+        clean_prov = proveedor.strip().lower()
+        where_clauses.append(f"LOWER(id_contrato) IN (SELECT id_contrato FROM `{PROJECT}.{DATASET}.contratos_electronicos` WHERE {safe_like('proveedor_adjudicado', clean_prov)})")
+        
+    where_sql = " AND ".join(where_clauses)
+    sql = f"""
+    SELECT DISTINCT
+        id_contrato,
+        identificador_modificacion AS id_modificacion,
+        fecha_creacion AS fecha,
+        proposito_modificacion AS proposito_y_justificacion,
+        SAFE_CAST(valor_modificacion AS NUMERIC) AS valor_nuevo,
+        SAFE_CAST(dias_extendidos AS INT64) AS dias_extendidos,
+        estado_modificacion AS estado
+    FROM `{PROJECT}.{DATASET}.modificaciones_contratos`
+    WHERE {where_sql}
+    ORDER BY fecha DESC
+    LIMIT {top}
+    """
+    try:
+        rows = query(sql, max_rows=top)
+        if not rows:
+            sql_alt = f"""
+            SELECT id_contrato, fecharegistro AS fecha, tipo, descripcion AS proposito_y_justificacion
+            FROM `{PROJECT}.{DATASET}.adiciones`
+            WHERE {where_sql}
+            ORDER BY fecharegistro DESC
+            LIMIT {top}
+            """
+            rows = query(sql_alt, max_rows=top)
+            
+        if not rows:
+            return f"No se encontraron eventos desglosados en la tabla de modificaciones para el criterio '{id_contrato or proveedor}'."
+            
+        return f"Detalle de Modificaciones/Adiciones Registradas en SECOP II:\n{format_table(rows)}"
+    except Exception as e:
+        return f"Error consultando detalle de modificaciones: {e}"
 
 
 # Registry of all tools for ADK
@@ -1060,6 +1112,7 @@ TOOLS = [
     listar_documentos_contrato,
     detectar_colusion_representante,
     consultar_auditoria_entregables,
+    consultar_detalle_modificaciones_contrato,
 ]
 
 

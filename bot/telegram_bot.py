@@ -424,7 +424,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"PDF error: {e}", exc_info=True)
 
         # 8. Send Excel file(s)
-        if send_excel and excels_list:
+        if excels_list:
             try:
                 import pandas as pd
                 import uuid

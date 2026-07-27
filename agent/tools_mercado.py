@@ -185,11 +185,12 @@ def historial_contratista(persona: str, top: int = 15) -> str:
 
 def buscar_contratos(busqueda: str = "", entidad: str = "", estado: str = "",
                       anio: int = 0, modalidad: str = "", tipo_contrato: str = "",
-                      excluir_tipo: str = "", proveedor: str = "", es_grupo: str = "", top: int = 15) -> str:
-    """Busca contratos por objeto, entidad, estado, año, modalidad, proveedor o si fue adjudicado a un grupo/consorcio.
+                      excluir_tipo: str = "", proveedor: str = "", es_grupo: str = "",
+                      id_contrato: str = "", top: int = 15) -> str:
+    """Busca contratos por ID de contrato, objeto, entidad, estado, año, modalidad, proveedor o si fue adjudicado a un grupo/consorcio.
     Busca en la tabla de contratos electronicos adjudicados.
     Args:
-        busqueda: Texto a buscar en el objeto del contrato (ej: software, aseo, vigilancia).
+        busqueda: Texto a buscar en el objeto o ID del contrato (ej: CO1.PCCNTR.8961123, software, aseo, vigilancia).
         entidad: Nombre parcial de la entidad (ej: SENA, Ministerio de Salud).
         estado: Estado del contrato (Activo, Liquidado, Terminado, etc).
         anio: Año de firma (ej: 2024, 2025).
@@ -198,25 +199,34 @@ def buscar_contratos(busqueda: str = "", entidad: str = "", estado: str = "",
         excluir_tipo: Tipo de contrato a excluir (ej: Prestacion de servicios).
         proveedor: Nombre o NIT del contratista adjudicado (ej: CONSORCIO DEFENDER, UNION TEMPORAL, 830144531).
         es_grupo: Si se busca contratos adjudicados a un consorcio/grupo, pasar 'Si'. Si se busca individuales, pasar 'No'.
+        id_contrato: ID especifico del contrato (ej: CO1.PCCNTR.8961123).
         top: Numero maximo de resultados.
     """
     where = "1=1"
-    if busqueda:
+    if id_contrato:
+        clean_id = id_contrato.strip().lower()
+        where += f" AND (LOWER(c.id_contrato) LIKE '%{clean_id}%' OR LOWER(c.proceso_de_compra) LIKE '%{clean_id}%' OR LOWER(c.referencia_del_contrato) LIKE '%{clean_id}%')"
+    elif busqueda:
         clean = strip_accents(busqueda.lower()).replace("'", "''")
-        stop_words = ('de', 'del', 'el', 'la', 'para', 'con', 'en', 'un', 'una', 'los', 'las', 'por', 'y')
-        words = [w for w in clean.split() if len(w) > 2 and w not in stop_words]
-        if not words:
-            words = [clean]
-            
-        keyword_clauses = []
-        for w in words:
-            keyword_clauses.append(f"""(
-              LOWER(REGEXP_REPLACE(NORMALIZE(c.objeto_del_contrato, NFD), r'\\pM', '')) LIKE '%{w}%'
-              OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_producto, NFD), r'\\pM', '')) LIKE '%{w}%'
-              OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_clase, NFD), r'\\pM', '')) LIKE '%{w}%'
-              OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_familia, NFD), r'\\pM', '')) LIKE '%{w}%'
-            )""")
-        where += " AND " + " AND ".join(keyword_clauses)
+        if any(k in clean for k in ("co1.", "pccntr", "req.", "ctrmod.", "proceso")) or (clean.replace(".", "").isdigit() and len(clean) >= 6):
+            clean_raw = busqueda.strip().lower()
+            where += f" AND (LOWER(c.id_contrato) LIKE '%{clean_raw}%' OR LOWER(c.proceso_de_compra) LIKE '%{clean_raw}%' OR LOWER(c.referencia_del_contrato) LIKE '%{clean_raw}%' OR LOWER(REGEXP_REPLACE(NORMALIZE(c.objeto_del_contrato, NFD), r'\\pM', '')) LIKE '%{clean}%')"
+        else:
+            stop_words = ('de', 'del', 'el', 'la', 'para', 'con', 'en', 'un', 'una', 'los', 'las', 'por', 'y')
+            words = [w for w in clean.split() if len(w) > 2 and w not in stop_words]
+            if not words:
+                words = [clean]
+                
+            keyword_clauses = []
+            for w in words:
+                keyword_clauses.append(f"""(
+                  LOWER(c.id_contrato) LIKE '%{w}%'
+                  OR LOWER(REGEXP_REPLACE(NORMALIZE(c.objeto_del_contrato, NFD), r'\\pM', '')) LIKE '%{w}%'
+                  OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_producto, NFD), r'\\pM', '')) LIKE '%{w}%'
+                  OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_clase, NFD), r'\\pM', '')) LIKE '%{w}%'
+                  OR LOWER(REGEXP_REPLACE(NORMALIZE(u.nombre_familia, NFD), r'\\pM', '')) LIKE '%{w}%'
+                )""")
+            where += " AND " + " AND ".join(keyword_clauses)
         
     if entidad:
         where += f" AND {safe_like('c.nombre_entidad', entidad)}"

@@ -77,39 +77,51 @@ def buscar_proveedor_sancionado(proveedor: str = "", top: int = 20) -> str:
     return f"Proveedores sancionados con contratos posteriores:\n{format_table(rows)}"
 
 
-def buscar_adiciones_excesivas(entidad: str = "", min_adiciones: int = 3, top: int = 20) -> str:
-    """Busca contratos con un numero excesivo de adiciones (de valor o plazo),
-    que pueden indicar mala planeacion o manipulacion del contrato original.
+def buscar_adiciones_excesivas(entidad: str = "", proveedor: str = "", id_contrato: str = "", min_adiciones: int = 1, top: int = 20) -> str:
+    """Busca contratos con adiciones (de valor o plazo), indicando modificaciones contractuales,
+    adiciones presupuestales o prorrogas de tiempo en SECOP II.
     Args:
         entidad: Nombre (parcial) de la entidad.
-        min_adiciones: Minimo de adiciones para considerar excesivo (default: 3).
+        proveedor: Nombre o NIT del proveedor.
+        id_contrato: Codigo o ID del contrato especifico.
+        min_adiciones: Minimo de adiciones para filtrar (default: 1).
         top: Numero maximo de resultados.
     """
     where = f"num_adiciones >= {min_adiciones}"
     if entidad:
         where += f" AND {safe_like('nombre_entidad', entidad)}"
+    if proveedor:
+        where += f" AND ({safe_like('proveedor_adjudicado', proveedor)})"
+    if id_contrato:
+        where += f" AND LOWER(id_contrato) LIKE '%{id_contrato.strip().lower()}%'"
     rows = query_view("v_anticorr_adiciones", where=where,
                        order="num_adiciones DESC", limit=top)
     if not rows:
-        return "No se encontraron contratos con adiciones excesivas."
-    return f"Contratos con adiciones excesivas:\n{format_table(rows)}"
+        return "No se encontraron contratos con adiciones para el criterio especificado."
+    return f"Contratos con adiciones de valor/plazo:\n{format_table(rows)}"
 
 
-def buscar_suspensiones_repetidas(entidad: str = "", top: int = 20) -> str:
-    """Busca contratos con 3 o mas suspensiones, lo que puede indicar
-    problemas de ejecucion o manipulacion de plazos.
+def buscar_suspensiones_repetidas(entidad: str = "", proveedor: str = "", id_contrato: str = "", top: int = 20) -> str:
+    """Busca contratos con suspensiones registradas, lo que indica
+    pausas temporales en la ejecucion contractual o problemas de plazos.
     Args:
         entidad: Nombre (parcial) de la entidad.
+        proveedor: Nombre o NIT del proveedor.
+        id_contrato: Codigo o ID del contrato especifico.
         top: Numero maximo de resultados.
     """
     where = "1=1"
     if entidad:
         where += f" AND {safe_like('nombre_entidad', entidad)}"
+    if proveedor:
+        where += f" AND ({safe_like('proveedor_adjudicado', proveedor)})"
+    if id_contrato:
+        where += f" AND LOWER(id_contrato) LIKE '%{id_contrato.strip().lower()}%'"
     rows = query_view("v_anticorr_suspensiones", where=where,
                        order="num_suspensiones DESC", limit=top)
     if not rows:
-        return "No se encontraron contratos con suspensiones repetidas."
-    return f"Contratos con suspensiones repetidas:\n{format_table(rows)}"
+        return "No se encontraron contratos con suspensiones registradas para el criterio especificado."
+    return f"Contratos con suspensiones de ejecucion:\n{format_table(rows)}"
 
 
 def buscar_sobrecosto(entidad: str = "", pct_minimo: float = 30, top: int = 20) -> str:

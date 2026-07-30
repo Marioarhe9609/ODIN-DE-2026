@@ -1014,7 +1014,7 @@ def consultar_auditoria_entregables(entidad: str = "", estado: str = "", id_cont
       a.estado AS estado_cumplimiento,
       a.alerta_aceptado_sin_implementar,
       a.evidencia_encontrada AS nombre_archivo,
-      e.url_archivo AS url_archivo,
+      COALESCE(e.url_archivo, c.urlproceso) AS url_archivo,
       c.urlproceso AS url_proceso
     FROM `{PROJECT}.{DATASET}.contratos_auditoria_entregables` a
     LEFT JOIN `{PROJECT}.{DATASET}.contratos_electronicos` c
@@ -1037,6 +1037,7 @@ def consultar_auditoria_entregables(entidad: str = "", estado: str = "", id_cont
         
     result += format_table(rows) + "\n\n"
     result += f"📊 FUENTE DE AUDITORÍA: Análisis multimodal en tiempo real sobre los anexos de SECOP II en la base `{PROJECT}.{DATASET}`."
+    return result
 def consultar_detalle_modificaciones_contrato(id_contrato: str = "", proveedor: str = "", top: int = 30) -> str:
     """Consulta el desglose detallado de cada modificacion, adicion u otrosi registrado en SECOP II para un contrato especifico o proveedor,
     incluyendo fechas de aprobacion, memorandos de soporte, dias extendidos, valores modificados y justificacion legal.
